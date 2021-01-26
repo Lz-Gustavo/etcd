@@ -64,7 +64,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// As the first two constants here declared, these represents a slightly modification
+// on etcd codebase to allow throughtput measuring during execution.
+var throughputFilename = os.Getenv("ETCD_THR_FILE")
+
 const (
+	measuringThroughput       = true
+	defaultThroughputFilename = "~/etcd-throughput.out"
+
 	DefaultSnapshotCount = 100000
 
 	// DefaultSnapshotCatchUpEntries is the number of entries for a slow follower
@@ -277,6 +284,11 @@ type EtcdServer struct {
 	leadElectedTime time.Time
 
 	*AccessController
+
+	// ad-hoc throughput measurement
+	t        *time.Ticker
+	thrCount uint32 // atomic
+	thrFile  *os.File
 }
 
 // NewServer creates a new EtcdServer from the supplied configuration. The
@@ -644,6 +656,21 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 	srv.r.transport = tr
 
+	// enable ad-hoc throughput measurement
+	if measuringThroughput {
+		var fn string
+		if throughputFilename != "" {
+			fn = throughputFilename
+		} else {
+			fn = defaultThroughputFilename
+		}
+		srv.thrFile, err = os.OpenFile(fn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
+			return nil, err
+		}
+		srv.t = time.NewTicker(time.Second)
+		// 'monitorThroughout' procedure is started later on 'srv.start' after context init
+	}
 	return srv, nil
 }
 
@@ -785,6 +812,9 @@ func (s *EtcdServer) start() {
 	s.readwaitc = make(chan struct{}, 1)
 	s.readNotifier = newNotifier()
 	s.leaderChanged = make(chan struct{})
+
+	// start throughput measurement...
+	go s.monitorThroughput(s.ctx)
 	if s.ClusterVersion() != nil {
 		if lg != nil {
 			lg.Info(
@@ -899,6 +929,23 @@ func (s *EtcdServer) Process(ctx context.Context, m raftpb.Message) error {
 		s.stats.RecvAppendReq(types.ID(m.From).String(), m.Size())
 	}
 	return s.r.Step(ctx, m)
+}
+
+// monitorThroughput implements an ad-hoc throughput measurement to allow simple experimentation of etcd.
+func (s *EtcdServer) monitorThroughput(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case <-s.t.C:
+			t := atomic.SwapUint32(&s.thrCount, 0)
+			_, err := fmt.Fprintf(s.thrFile, "%d\n", t)
+			if err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (s *EtcdServer) IsIDRemoved(id uint64) bool { return s.cluster.IsIDRemoved(types.ID(id)) }
@@ -1046,6 +1093,10 @@ func (s *EtcdServer) run() {
 			s.compactor.Stop()
 		}
 		close(s.done)
+
+		if measuringThroughput {
+			s.thrFile.Close()
+		}
 	}()
 
 	var expiredLeaseC <-chan []*lease.Lease
@@ -1058,6 +1109,8 @@ func (s *EtcdServer) run() {
 		case ap := <-s.r.apply():
 			f := func(context.Context) { s.applyAll(&ep, &ap) }
 			sched.Schedule(f)
+			atomic.AddUint32(&s.thrCount, 1)
+
 		case leases := <-expiredLeaseC:
 			s.goAttach(func() {
 				// Increases throughput of expired leases deletion process through parallelization
