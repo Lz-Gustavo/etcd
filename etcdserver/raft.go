@@ -246,6 +246,11 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 
 				// gofail: var raftBeforeSave struct{}
+				//
+				// LGX: stable storage save is done here within the raft scope, once an entry is considered
+				// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
+				//
+				//   TODO: Implement the Storage interface calling beemport.Log()
 				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 					if r.lg != nil {
 						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))

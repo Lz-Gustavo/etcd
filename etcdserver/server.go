@@ -64,11 +64,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// As the first two constants here declared, these represents a slightly modification
+// LGX: As the first two constants here declared, these represents a slightly modification
 // on etcd codebase to allow throughtput measuring during execution.
 var throughputFilename = os.Getenv("ETCD_THR_FILE")
 
 const (
+	// LGX: TODO: switch to envs later for scripting
 	measuringThroughput       = true
 	defaultThroughputFilename = "~/etcd-throughput.out"
 
@@ -285,7 +286,7 @@ type EtcdServer struct {
 
 	*AccessController
 
-	// ad-hoc throughput measurement
+	// LGX: ad-hoc throughput measurement
 	t        *time.Ticker
 	thrCount uint32 // atomic
 	thrFile  *os.File
@@ -656,7 +657,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 	srv.r.transport = tr
 
-	// enable ad-hoc throughput measurement
+	// LGX: enable ad-hoc throughput measurement
 	if measuringThroughput {
 		var fn string
 		if throughputFilename != "" {
@@ -813,7 +814,7 @@ func (s *EtcdServer) start() {
 	s.readNotifier = newNotifier()
 	s.leaderChanged = make(chan struct{})
 
-	// start throughput measurement...
+	// LGX: start throughput measurement
 	go s.monitorThroughput(s.ctx)
 	if s.ClusterVersion() != nil {
 		if lg != nil {
@@ -931,7 +932,7 @@ func (s *EtcdServer) Process(ctx context.Context, m raftpb.Message) error {
 	return s.r.Step(ctx, m)
 }
 
-// monitorThroughput implements an ad-hoc throughput measurement to allow simple experimentation of etcd.
+// LGX: monitorThroughput implements an ad-hoc throughput measurement to allow simple experimentation of etcd.
 func (s *EtcdServer) monitorThroughput(ctx context.Context) error {
 	for {
 		select {
@@ -1094,6 +1095,7 @@ func (s *EtcdServer) run() {
 		}
 		close(s.done)
 
+		// LGX: close throughput file, flushing data
 		if measuringThroughput {
 			s.thrFile.Close()
 		}
@@ -1107,9 +1109,18 @@ func (s *EtcdServer) run() {
 	for {
 		select {
 		case ap := <-s.r.apply():
+			// LGX: kind of 'main' server procedure. This select statement is triggered once new
+			// entries are received from Raft. Maybe I should sched.Schedule a diff apply entries
+			// functions, or simply avoid calling the stablestorage logging...
+			//
+			//   TODO: investigate if this receive channel behaviour is also executed by the leader
+			//   node. I'm pretty sure it is.
 			f := func(context.Context) { s.applyAll(&ep, &ap) }
 			sched.Schedule(f)
-			atomic.AddUint32(&s.thrCount, 1)
+
+			// LGX: count throughput based on the number of received entries. Config entries might
+			// be received at first, but they are simply later ignored on data analysis.
+			atomic.AddUint32(&s.thrCount, uint32(len(ap.entries)))
 
 		case leases := <-expiredLeaseC:
 			s.goAttach(func() {
@@ -1441,6 +1452,10 @@ func (s *EtcdServer) applyEntries(ep *etcdProgress, apply *apply) {
 	}
 	var shouldstop bool
 	if ep.appliedt, ep.appliedi, shouldstop = s.apply(ents, &ep.confState); shouldstop {
+		// LGX: basically sets a 10s timeout for applying received entries. Why not simply
+		// 10*time.Second? Or parse from a constant maybe?
+		//
+		//   TODO: send a PR fixing this...
 		go s.stopWithDelay(10*100*time.Millisecond, fmt.Errorf("the member has been permanently removed from the cluster"))
 	}
 }
@@ -2221,6 +2236,11 @@ func (s *EtcdServer) apply(
 }
 
 // applyEntryNormal apples an EntryNormal type raftpb request to the EtcdServer
+//
+// LGX: the last function called on server.go during the command exec. procedure.
+// The executed order up to this point was (at least):
+//   start() -> run() -> applyAll() -> applyEntries() -> apply() -> applyEntryNormal()
+// the next procedure is applyV3.Apply(), from apply.go file
 func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 	shouldApplyV3 := false
 	if e.Index > s.consistIndex.ConsistentIndex() {
