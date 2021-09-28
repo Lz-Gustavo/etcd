@@ -3,6 +3,7 @@ module go.etcd.io/etcd
 go 1.14
 
 require (
+	github.com/Lz-Gustavo/beemport v0.0.0-20210928202331-a886eaf8420f
 	github.com/bgentry/speakeasy v0.1.0
 	github.com/cockroachdb/datadriven v0.0.0-20190809214429-80d97fb3cbaa
 	github.com/coreos/go-semver v0.2.0
@@ -14,7 +15,7 @@ require (
 	github.com/fatih/color v1.7.0 // indirect
 	github.com/gogo/protobuf v1.2.1
 	github.com/golang/groupcache v0.0.0-20160516000752-02826c3e7903
-	github.com/golang/protobuf v1.3.2
+	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.0
 	github.com/google/uuid v1.0.0
 	github.com/gorilla/websocket v0.0.0-20170926233335-4201258b820c // indirect
