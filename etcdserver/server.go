@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,7 +67,10 @@ import (
 
 // LGX: As the first two constants here declared, these represents a slightly modification
 // on etcd codebase to allow throughtput measuring during execution.
-var throughputFilename = os.Getenv("ETCD_THR_FILE")
+var (
+	throughputFilename     = os.Getenv("ETCD_THR_FILE")
+	beelogStorageEnable, _ = strconv.ParseBool(os.Getenv("BEELOG_ENABLE"))
+)
 
 const (
 	// LGX: TODO: switch to envs later for scripting
@@ -515,24 +519,16 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	lstats := stats.NewLeaderStats(id.String())
 
 	heartbeat := time.Duration(cfg.TickMs) * time.Millisecond
+
+	// LGX: server init procedure was modified here to utilize beelog storage if ENV is set
 	srv = &EtcdServer{
-		readych:     make(chan struct{}),
-		Cfg:         cfg,
-		lgMu:        new(sync.RWMutex),
-		lg:          cfg.Logger,
-		errorc:      make(chan error, 1),
-		v2store:     st,
-		snapshotter: ss,
-		r: *newRaftNode(
-			raftNodeConfig{
-				lg:          cfg.Logger,
-				isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
-				Node:        n,
-				heartbeat:   heartbeat,
-				raftStorage: s,
-				storage:     NewStorage(w, ss),
-			},
-		),
+		readych:          make(chan struct{}),
+		Cfg:              cfg,
+		lgMu:             new(sync.RWMutex),
+		lg:               cfg.Logger,
+		errorc:           make(chan error, 1),
+		v2store:          st,
+		snapshotter:      ss,
 		id:               id,
 		attributes:       membership.Attributes{Name: cfg.Name, ClientURLs: cfg.ClientURLs.StringSlice()},
 		cluster:          cl,
@@ -544,6 +540,25 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		forceVersionC:    make(chan struct{}),
 		AccessController: &AccessController{CORS: cfg.CORS, HostWhitelist: cfg.HostWhitelist},
 	}
+
+	nodeCfg := raftNodeConfig{
+		lg:          cfg.Logger,
+		isIDRemoved: func(id uint64) bool { return cl.IsIDRemoved(types.ID(id)) },
+		Node:        n,
+		heartbeat:   heartbeat,
+		raftStorage: s,
+	}
+
+	if beelogStorageEnable {
+		// LGX: beelog storage interface
+		nodeCfg.storage = NewBeelogStorage()
+
+	} else {
+		// LGX: default storage
+		nodeCfg.storage = NewStorage(w, ss)
+	}
+	srv.r = *newRaftNode(nodeCfg)
+
 	serverID.With(prometheus.Labels{"server_id": id.String()}).Set(1)
 
 	srv.applyV2 = &applierV2store{store: srv.v2store, cluster: srv.cluster}

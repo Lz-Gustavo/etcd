@@ -50,6 +50,11 @@ func NewBeelogStorage() Storage {
 
 func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	for _, ent := range ents {
+		// non-command entries (i.e. config changes) wont be logged within beelog. This wont
+		// be a problem for a while, since the first exemperiments will consider a stable
+		// cluster. Also, the first throughput measurements are always discard due to system
+		// setup, which will ensure a fair comparison between both strategies. Once we start
+		// measuring recovery, we'll think of a better way to log these.
 		if ent.Type != raftpb.EntryNormal {
 			continue
 		}
