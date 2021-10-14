@@ -7,7 +7,6 @@ package etcdserver
 
 import (
 	"context"
-	"errors"
 	"log"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
@@ -19,19 +18,21 @@ import (
 )
 
 const (
-	beelogBatchSize uint32 = 100
+	beelogBatchSize uint32 = 1000
 	beelogConcLevel        = 2
-	logsDir                = "./tmp"
+	logsDir                = "/tmp/beelog/"
 )
 
 func configBeelog() *beemport.LogConfig {
+	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
-		Sync:    false,
-		Measure: false,
-		Tick:    beemport.Interval,
-		Period:  beelogBatchSize,
-		KeepAll: true,
-		Fname:   logsDir + "beelog.log",
+		Sync:       false,
+		Measure:    false,
+		ParallelIO: false,
+		Tick:       beemport.Interval,
+		Period:     beelogBatchSize,
+		KeepAll:    true,
+		Fname:      logsDir + "beelog.log",
 	}
 }
 
@@ -43,7 +44,7 @@ type beelogStorage struct {
 func NewBeelogStorage() Storage {
 	ct, err := beemport.NewConcTableWithConfig(context.Background(), beelogConcLevel, configBeelog())
 	if err != nil {
-		log.Fatalln("")
+		log.Fatalln("failed initializing ConcTable structure")
 	}
 	return &beelogStorage{ct}
 }
@@ -59,12 +60,13 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			continue
 		}
 
-		bent, err := convertRaftEntryIntoBeelogEntry(ent)
-		if err != nil {
-			return err
+		bent := convertRaftEntryIntoBeelogEntry(ent)
+		if bent == nil {
+			log.Println("could not convert entry", ent.Index, "ignoring...")
+			continue
 		}
 
-		if err = bs.wal.Log(bent); err != nil {
+		if err := bs.wal.Log(bent); err != nil {
 			return err
 		}
 	}
@@ -88,7 +90,7 @@ func (bs *beelogStorage) Sync() error {
 	return nil
 }
 
-func convertRaftEntryIntoBeelogEntry(entry raftpb.Entry) (*beelogpb.Entry, error) {
+func convertRaftEntryIntoBeelogEntry(entry raftpb.Entry) *beelogpb.Entry {
 	// NOTE: unmarshaling here is excessively expensive since it is also unmarshaled
 	// later when request is applied. This will result in a significant performance
 	// overhead which will compromise our experiments.
@@ -96,7 +98,11 @@ func convertRaftEntryIntoBeelogEntry(entry raftpb.Entry) (*beelogpb.Entry, error
 	// TODO: think of a better way to log this...
 	var raftReq pb.InternalRaftRequest
 	if !pbutil.MaybeUnmarshal(&raftReq, entry.Data) {
-		return nil, errors.New("failed unmarshaling entry into raft request")
+		return nil
+	}
+
+	if raftReq.Put == nil && raftReq.Range == nil {
+		return nil
 	}
 
 	var bent *beelogpb.Entry
@@ -108,7 +114,7 @@ func convertRaftEntryIntoBeelogEntry(entry raftpb.Entry) (*beelogpb.Entry, error
 			WriteOp: isWriteOp,
 			Command: entry.Data,
 		}
-		return bent, nil
+		return bent
 	}
 
 	bent = &beelogpb.Entry{
@@ -116,5 +122,5 @@ func convertRaftEntryIntoBeelogEntry(entry raftpb.Entry) (*beelogpb.Entry, error
 		Key:     string(raftReq.Range.Key),
 		WriteOp: false,
 	}
-	return bent, nil
+	return bent
 }

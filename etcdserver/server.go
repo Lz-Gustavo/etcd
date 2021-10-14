@@ -69,7 +69,7 @@ import (
 // on etcd codebase to allow throughtput measuring during execution.
 var (
 	throughputFilename     = os.Getenv("ETCD_THR_FILE")
-	beelogStorageEnable, _ = strconv.ParseBool(os.Getenv("BEELOG_ENABLE"))
+	beelogStorageEnable, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_ENABLE"))
 )
 
 const (
