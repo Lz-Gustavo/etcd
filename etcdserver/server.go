@@ -1133,9 +1133,10 @@ func (s *EtcdServer) run() {
 			f := func(context.Context) { s.applyAll(&ep, &ap) }
 			sched.Schedule(f)
 
+			// LGX: previous throughput measurement was here, moved to applyEntryNormal()
 			// LGX: count throughput based on the number of received entries. Config entries might
 			// be received at first, but they are simply later ignored on data analysis.
-			atomic.AddUint32(&s.thrCount, uint32(len(ap.entries)))
+			// atomic.AddUint32(&s.thrCount, uint32(len(ap.entries)))
 
 		case leases := <-expiredLeaseC:
 			s.goAttach(func() {
@@ -2311,6 +2312,9 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 		}
 		ar = s.applyV3.Apply(&raftReq)
 	}
+
+	// LGX: count througput after applying new state
+	atomic.AddUint32(&s.thrCount, 1)
 
 	if ar == nil {
 		return

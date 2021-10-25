@@ -7,13 +7,19 @@ stateFolder=/tmp/etcd
 export ETCD_THR_FILE=/tmp/throuput.out
 export ETCD_BEELOG_ENABLE=false
 
+export ETCD_BEELOG_BATCH_SIZE=1000
+export ETCD_BEELOG_CONC_LEVEL=2
+export ETCD_BEELOG_LOGS_DIR=/tmp/beelog
+export ETCD_BEELOG_PARALLEL_IO=false
+export ETCD_BEELOG_SECOND_DISK_LOGS_DIR=/disk2/beelog
+
 export ETCD_DATA_DIR=${stateFolder}/data
 export ETCD_WAL_DIR=${stateFolder}/wal
 export ETCD_SNAPSHOT_COUNT=1000000000000 # infinite?
 
 
 if [[ ${freshStart} == "true" ]]; then
-  rm -r ${stateFolder}
+  rm -rf ${stateFolder}
 fi
 
 ./go/src/github.com/Lz-Gustavo/etcd/bin/etcd --name=node0 \

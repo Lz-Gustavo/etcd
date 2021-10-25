@@ -8,6 +8,8 @@ package etcdserver
 import (
 	"context"
 	"log"
+	"os"
+	"strconv"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
 	"go.etcd.io/etcd/pkg/pbutil"
@@ -18,21 +20,63 @@ import (
 )
 
 const (
-	beelogBatchSize uint32 = 1000
-	beelogConcLevel        = 2
-	logsDir                = "/tmp/beelog/"
+	defaultBeelogConcLevel = 2
+	defaultBeelogBatchSize = 1000
+	defaultBeelogLogsDir   = "/tmp/beelog"
 )
+
+var (
+	beelogBatchSize uint64
+	beelogConcLevel int
+	beelogLogsDir   string
+
+	beelogParallelIO         bool
+	beeelogSecondDiskLogsDir string
+)
+
+func init() {
+	var err error
+	bs := os.Getenv("ETCD_BEELOG_BATCH_SIZE")
+	if beelogBatchSize, err = strconv.ParseUint(bs, 10, 32); err != nil {
+		log.Println("using default value for ETCD_BEELOG_BATCH_SIZE")
+		beelogBatchSize = defaultBeelogBatchSize
+	}
+
+	cl := os.Getenv("ETCD_BEELOG_CONC_LEVEL")
+	if beelogConcLevel, err = strconv.Atoi(cl); err != nil {
+		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
+		beelogConcLevel = defaultBeelogConcLevel
+	}
+
+	exists := false
+	if beelogLogsDir, exists = os.LookupEnv("ETCD_BEELOG_LOGS_DIR"); !exists {
+		log.Println("using default value for ETCD_BEELOG_LOGS_DIR")
+		beelogLogsDir = defaultBeelogLogsDir
+	}
+
+	beelogParallelIO, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
+	if !beelogParallelIO {
+		return
+	}
+
+	log.Println("ETCD_BEELOG_PARALLEL_IO enabled")
+	if beeelogSecondDiskLogsDir, exists = os.LookupEnv("ETCD_BEELOG_SECOND_DISK_LOGS_DIR"); !exists {
+		log.Println("using default value for ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
+		beeelogSecondDiskLogsDir = defaultBeelogLogsDir
+	}
+}
 
 func configBeelog() *beemport.LogConfig {
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
-		Sync:       false,
-		Measure:    false,
-		ParallelIO: false,
-		Tick:       beemport.Interval,
-		Period:     beelogBatchSize,
-		KeepAll:    true,
-		Fname:      logsDir + "beelog.log",
+		Sync:        false,
+		Measure:     false,
+		Tick:        beemport.Interval,
+		Period:      uint32(beelogBatchSize),
+		KeepAll:     true,
+		Fname:       beelogLogsDir + "/beelog.log",
+		ParallelIO:  beelogParallelIO,
+		SecondFname: beeelogSecondDiskLogsDir + "/beelog.log",
 	}
 }
 
