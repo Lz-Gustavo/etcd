@@ -1,10 +1,11 @@
 #!/bin/bash
 
-nodeIP=155.98.36.32
+nodeIP=10.10.1.3
 freshStart=true
 stateFolder=/tmp/etcd
 
-export ETCD_THR_FILE=/tmp/throuput.out
+export ETCD_THR_FILE=/tmp/throughput.out
+export ETCD_LAT_FILE=/tmp/latency.out
 export ETCD_BEELOG_ENABLE=false
 
 export ETCD_BEELOG_BATCH_SIZE=1000

@@ -171,6 +171,10 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 			case <-r.ticker.C:
 				r.tick()
 			case rd := <-r.Ready():
+
+				// LGX: start the latency timestamp for the first received entry if
+				// its type of raftpb.EntryNormal?
+
 				if rd.SoftState != nil {
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 					if newLeader {
@@ -217,6 +221,12 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				updateCommittedIndex(&ap, rh)
 
+				// LGX: here it basically replicates the decided log to its peers while continues to persist
+				// the hard state on this same routine (as stated on the comment below...)
+				//
+				// Should we count latency here or when the soft state is received from the transport?
+				// I think here its a better option since we cant assure the timestamp on the EXACT receive
+				// time
 				select {
 				case r.applyc <- ap:
 				case <-r.stopped:
@@ -250,7 +260,8 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				// LGX: stable storage save is done here within the raft scope, once an entry is considered
 				// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
 				//
-				//   TODO: Implement the Storage interface calling beemport.Log()
+				// NOTE: If the ETCD_BEELOG_ENABLE env is set, the storage interface is initialized with beemport,
+				// so basically the storage.Save() here intrinsically calls beemport.Log() through a wrapper
 				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 					if r.lg != nil {
 						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
