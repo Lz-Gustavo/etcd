@@ -224,13 +224,21 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				// LGX: here it basically replicates the decided log to its peers while continues to persist
 				// the hard state on this same routine (as stated on the comment below...)
 				//
-				// Should we count latency here or when the soft state is received from the transport?
-				// I think here its a better option since we cant assure the timestamp on the EXACT receive
-				// time
+				// Should we count latency right after the select here or when the soft state is received from
+				// the transport? I think here its a better option since we cant assure the timestamp on the EXACT
+				// receive time
 				select {
 				case r.applyc <- ap:
 				case <-r.stopped:
 					return
+				}
+
+				// LGX: maybe identify interval of batch of commands here?
+				for _, ent := range ap.entries {
+					if ent.Type != raftpb.EntryNormal {
+						continue
+					}
+					mayMeasureCurrentBatch(ent.Index)
 				}
 
 				// the leader can write to its disk in parallel with replicating to the followers and them

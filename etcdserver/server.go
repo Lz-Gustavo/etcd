@@ -1114,6 +1114,10 @@ func (s *EtcdServer) run() {
 		if measuringThroughput {
 			s.thrFile.Close()
 		}
+
+		if measuringLatency {
+			flushLatBufferIntoFile()
+		}
 	}()
 
 	var expiredLeaseC <-chan []*lease.Lease
