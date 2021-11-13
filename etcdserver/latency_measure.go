@@ -28,18 +28,6 @@ var (
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
-	latBuff = &bytes.Buffer{}
-
-	fn := latencyFilename
-	if fn == "" {
-		fn = defaultLatencyFilename
-	}
-
-	var err error
-	latFile, err = os.OpenFile(fn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		log.Fatalln("failed initializing latency file, err:", err.Error())
-	}
 }
 
 func mayMeasureCurrentEntry(index uint64) bool {

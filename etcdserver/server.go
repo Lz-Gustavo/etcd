@@ -15,6 +15,7 @@
 package etcdserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"expvar"
@@ -74,7 +75,7 @@ var (
 
 const (
 	// LGX: TODO: switch to envs later for scripting
-	measuringThroughput       = true
+	isMeasuringThroughput     = true
 	defaultThroughputFilename = "~/etcd-throughput.out"
 
 	DefaultSnapshotCount = 100000
@@ -672,8 +673,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 	srv.r.transport = tr
 
-	// LGX: enable ad-hoc throughput measurement
-	if measuringThroughput {
+	// LGX: ad-hoc throughput measurement enabled
+	if isMeasuringThroughput {
 		var fn string
 		if throughputFilename != "" {
 			fn = throughputFilename
@@ -686,6 +687,20 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		}
 		srv.t = time.NewTicker(time.Second)
 		// 'monitorThroughout' procedure is started later on 'srv.start' after context init
+	}
+
+	// LGX: server-side latency measurement enabled
+	if isMeasuringLatency {
+		latBuff = &bytes.Buffer{}
+		fn := latencyFilename
+		if fn == "" {
+			fn = defaultLatencyFilename
+		}
+
+		latFile, err = os.OpenFile(fn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return srv, nil
 }
@@ -1111,7 +1126,7 @@ func (s *EtcdServer) run() {
 		close(s.done)
 
 		// LGX: close throughput file, flushing data
-		if measuringThroughput {
+		if isMeasuringThroughput {
 			s.thrFile.Close()
 		}
 
