@@ -104,13 +104,13 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			continue
 		}
 
+		msr := mayMeasureCurrentBatch(ent.Index)
 		bent := convertRaftEntryIntoBeelogEntry(ent)
 		if bent == nil {
-			log.Println("could not convert entry", ent.Index, "ignoring...")
-			continue
+			log.Fatalln("could not convert entry", ent.Index)
 		}
 
-		if err := bs.wal.Log(bent); err != nil {
+		if err := bs.wal.LogAndMeasureLat(bent, msr); err != nil {
 			return err
 		}
 	}

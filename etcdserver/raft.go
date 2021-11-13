@@ -171,10 +171,6 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 			case <-r.ticker.C:
 				r.tick()
 			case rd := <-r.Ready():
-
-				// LGX: start the latency timestamp for the first received entry if
-				// its type of raftpb.EntryNormal?
-
 				if rd.SoftState != nil {
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 					if newLeader {
@@ -221,8 +217,8 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				updateCommittedIndex(&ap, rh)
 
-				// LGX: here it basically replicates the decided log to its peers while continues to persist
-				// the hard state on this same routine (as stated on the comment below...)
+				// LGX: here it basically applies the commit entries while continues to persist the
+				// hard state on this same routine (as stated on the comment below)
 				//
 				// Should we count latency right after the select here or when the soft state is received from
 				// the transport? I think here its a better option since we cant assure the timestamp on the EXACT
@@ -234,12 +230,12 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 
 				// LGX: maybe identify interval of batch of commands here?
-				for _, ent := range ap.entries {
-					if ent.Type != raftpb.EntryNormal {
-						continue
-					}
-					mayMeasureCurrentBatch(ent.Index)
-				}
+				// for _, ent := range ap.entries {
+				// 	if ent.Type != raftpb.EntryNormal {
+				// 		continue
+				// 	}
+				// 	mayMeasureCurrentBatch(ent.Index)
+				// }
 
 				// the leader can write to its disk in parallel with replicating to the followers and them
 				// writing to their disks.

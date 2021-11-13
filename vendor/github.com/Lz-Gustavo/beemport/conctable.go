@@ -147,7 +147,7 @@ func (ct *ConcTable) Log(cmd *pb.Entry) error {
 
 	// first command
 	if ct.isMeasuringLat {
-		ct.latMeasure.notifyReceivedCommand()
+		ct.latMeasure.notifyReceivedCommandRand()
 	}
 
 	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
@@ -179,6 +179,64 @@ func (ct *ConcTable) Log(cmd *pb.Entry) error {
 	if willReduce {
 		// mutext will be later unlocked by the logger routine
 		if ct.isMeasuringLat {
+			ct.latMeasure.notifyTableFill()
+			ct.loggerReq <- logEvent{cur, ct.latMeasure.msrIndex}
+
+		} else {
+			ct.loggerReq <- logEvent{cur, -1}
+		}
+		return nil
+	}
+
+	ct.mu[cur].Unlock()
+	return nil
+}
+
+// LogAndMeasureLat records the occurence of command 'cmd' on the provided
+// index and starts the latency measurement for the informed batch if 'mustMeasureLat'
+// is informed. This procedure allows the randomness of deciding wheter a
+// batch must be measured be implemented outside of this library (i.e. on
+// the caller scope), which allows for a complementary latency measurement rather
+// than an isolated one. The structure must be initialized with Measure flag
+// enabled, or else LogAndMeasureLat will panic.
+func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error {
+	ct.cursorMu.Lock()
+	cur := ct.cursor
+
+	// first command
+	if mustMeasureLat {
+		ct.latMeasure.notifyReceivedCommand()
+	}
+
+	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
+	if advance {
+		ct.advanceCurrentView()
+	}
+
+	// must acquire view mutex before releasing cursor to ensure safety
+	ct.mu[cur].Lock()
+	ct.cursorMu.Unlock()
+
+	if mustMeasureLat {
+		ct.latMeasure.notifyCommandWrite()
+	}
+
+	// adjust first structure index
+	if !ct.logs[cur].logged {
+		ct.logs[cur].first = cmd.Id
+		ct.logs[cur].logged = true
+	}
+
+	if cmd.WriteOp {
+		// update current state for that particular key
+		ct.views[cur][cmd.Key] = cmd
+	}
+	// adjust last index
+	ct.logs[cur].last = cmd.Id
+
+	if willReduce {
+		// mutext will be later unlocked by the logger routine
+		if mustMeasureLat {
 			ct.latMeasure.notifyTableFill()
 			ct.loggerReq <- logEvent{cur, ct.latMeasure.msrIndex}
 

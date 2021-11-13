@@ -50,6 +50,14 @@ func newLatencyMeasure(concLvl, interval int, filename string) (*latencyMeasure,
 
 func (lm *latencyMeasure) notifyReceivedCommand() {
 	lm.absIndex++
+	if lm.absIndex%lm.interval == 1 || lm.interval == 1 {
+		lm.initLat[lm.msrIndex] = time.Now().UnixNano()
+		lm.drawn = true
+	}
+}
+
+func (lm *latencyMeasure) notifyReceivedCommandRand() {
+	lm.absIndex++
 	if (lm.absIndex%lm.interval == 1 || lm.interval == 1) && rand.Intn(measureChance) == 0 {
 		lm.initLat[lm.msrIndex] = time.Now().UnixNano()
 		lm.drawn = true

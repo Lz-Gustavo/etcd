@@ -3,7 +3,6 @@ package etcdserver
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -25,7 +24,6 @@ var (
 
 	latFile *os.File
 	latBuff *bytes.Buffer
-	// isMeasuringCurBatch bool
 )
 
 func init() {
@@ -46,20 +44,16 @@ func init() {
 
 // TODO: identify if its first command by modulo operation over batch size,
 // calculate rand chance, write into file
-func mayMeasureCurrentBatch(index uint64) {
-	// not first command nor batch size = 1, ignore...
-	if index%beelogBatchSize != 0 && beelogBatchSize != 1 {
-		return
-	}
-
+func mayMeasureCurrentBatch(index uint64) bool {
 	if rand.Intn(latMeasureChance) == 0 {
 		fmt.Fprintln(latBuff, time.Now().UnixNano())
+		return true
 	}
+	return false
 }
 
 func flushLatBufferIntoFile() {
-	_, err := io.Copy(latFile, latBuff)
-	if err != nil {
+	if _, err := latBuff.WriteTo(latFile); err != nil {
 		log.Fatalln("failed copying into file, err:", err.Error())
 	}
 	latFile.Close()
