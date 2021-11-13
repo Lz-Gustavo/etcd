@@ -7,6 +7,7 @@ package etcdserver
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -88,7 +89,7 @@ type beelogStorage struct {
 func NewBeelogStorage() Storage {
 	ct, err := beemport.NewConcTableWithConfig(context.Background(), beelogConcLevel, configBeelog())
 	if err != nil {
-		log.Fatalln("failed initializing ConcTable structure")
+		log.Fatalln("failed initializing ConcTable structure, err:", err.Error())
 	}
 	return &beelogStorage{ct}
 }
@@ -104,10 +105,17 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			continue
 		}
 
-		msr := mayMeasureCurrentEntry(ent.Index)
+		ts, msr := mayMeasureLat()
 		bent := convertRaftEntryIntoBeelogEntry(ent)
 		if bent == nil {
-			log.Fatalln("could not convert entry", ent.Index)
+			log.Println("could not convert entry", ent.Index)
+		}
+
+		// NOTE: the idea is to save the previously taken timestamp only if an entry is
+		// successfully converted to a beelog entry, avoiding the necessity to erase the
+		// buffer if it isnt
+		if msr {
+			fmt.Fprintln(latBuff, ts)
 		}
 
 		if err := bs.wal.LogAndMeasureLat(bent, msr); err != nil {

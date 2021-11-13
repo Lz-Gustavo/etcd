@@ -2,7 +2,6 @@ package etcdserver
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"math/rand"
 	"os"
@@ -30,12 +29,11 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func mayMeasureCurrentEntry(index uint64) bool {
+func mayMeasureLat() (int64, bool) {
 	if rand.Intn(latMeasureChance) == 0 {
-		fmt.Fprintln(latBuff, time.Now().UnixNano())
-		return true
+		return time.Now().UnixNano(), true
 	}
-	return false
+	return 0, false
 }
 
 func flushLatBufferIntoFile() {
