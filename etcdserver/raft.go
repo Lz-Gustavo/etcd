@@ -273,6 +273,12 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 						plog.Fatalf("failed to save state and entries error: %v", err)
 					}
 				}
+
+				// LGX: count latency after wal persistence
+				if !beelogStorageEnable && isMeasuringLatency {
+					fmt.Fprintln(latBuff, time.Now().UnixNano())
+				}
+
 				if !raft.IsEmptyHardState(rd.HardState) {
 					proposalsCommitted.Set(float64(rd.HardState.Commit))
 				}

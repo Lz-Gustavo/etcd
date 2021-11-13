@@ -70,7 +70,7 @@ func configBeelog() *beemport.LogConfig {
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
 		Sync:        false,
-		Measure:     false,
+		Measure:     isMeasuringLatency,
 		Tick:        beemport.Interval,
 		Period:      uint32(beelogBatchSize),
 		KeepAll:     true,
@@ -104,7 +104,7 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			continue
 		}
 
-		msr := mayMeasureCurrentBatch(ent.Index)
+		msr := mayMeasureCurrentEntry(ent.Index)
 		bent := convertRaftEntryIntoBeelogEntry(ent)
 		if bent == nil {
 			log.Fatalln("could not convert entry", ent.Index)

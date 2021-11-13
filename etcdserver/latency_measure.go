@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultLatencyFilename = "~/etcd-latency.out"
-	measuringLatency       = true
+	isMeasuringLatency     = true
 	latMeasureChance       = 10
 )
 
@@ -42,9 +42,7 @@ func init() {
 	}
 }
 
-// TODO: identify if its first command by modulo operation over batch size,
-// calculate rand chance, write into file
-func mayMeasureCurrentBatch(index uint64) bool {
+func mayMeasureCurrentEntry(index uint64) bool {
 	if rand.Intn(latMeasureChance) == 0 {
 		fmt.Fprintln(latBuff, time.Now().UnixNano())
 		return true

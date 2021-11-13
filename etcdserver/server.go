@@ -1115,7 +1115,7 @@ func (s *EtcdServer) run() {
 			s.thrFile.Close()
 		}
 
-		if measuringLatency {
+		if isMeasuringLatency {
 			flushLatBufferIntoFile()
 		}
 	}()
