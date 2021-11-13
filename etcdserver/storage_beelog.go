@@ -68,16 +68,19 @@ func init() {
 }
 
 func configBeelog() *beemport.LogConfig {
+	latFname := "/tmp/bl-" + strconv.Itoa(int(beelogBatchSize)) + "-latency.out"
+
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
-		Sync:        false,
-		Measure:     isMeasuringLatency,
-		Tick:        beemport.Interval,
-		Period:      uint32(beelogBatchSize),
-		KeepAll:     true,
-		Fname:       beelogLogsDir + "/beelog.log",
-		ParallelIO:  beelogParallelIO,
-		SecondFname: beeelogSecondDiskLogsDir + "/beelog.log",
+		Sync:         false,
+		Tick:         beemport.Interval,
+		Period:       uint32(beelogBatchSize),
+		KeepAll:      true,
+		Fname:        beelogLogsDir + "/beelog.log",
+		ParallelIO:   beelogParallelIO,
+		SecondFname:  beeelogSecondDiskLogsDir + "/beelog.log",
+		Measure:      isMeasuringLatency,
+		MeasureFname: latFname,
 	}
 }
 
@@ -109,6 +112,7 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 		bent := convertRaftEntryIntoBeelogEntry(ent)
 		if bent == nil {
 			log.Println("could not convert entry", ent.Index)
+			continue
 		}
 
 		// NOTE: the idea is to save the previously taken timestamp only if an entry is

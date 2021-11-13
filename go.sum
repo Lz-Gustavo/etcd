@@ -1,9 +1,9 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/Lz-Gustavo/beemport v0.0.0-20211106172334-43db00c9beaa h1:jOYWbTrYRyKqBfkHDwfiOSm3RC5qZy4lhux9dXJ5VQA=
-github.com/Lz-Gustavo/beemport v0.0.0-20211106172334-43db00c9beaa/go.mod h1:qwF8dnsZh+p8u9zwXnZzuTB/10MPeCP2spZgAW2/aTg=
 github.com/Lz-Gustavo/beemport v0.0.0-20211113132714-9962a9d4c1d2 h1:JVsvidkbGP6+TO1rIzuBXuArrH94Y0mhSzZYIsMjeGo=
 github.com/Lz-Gustavo/beemport v0.0.0-20211113132714-9962a9d4c1d2/go.mod h1:qwF8dnsZh+p8u9zwXnZzuTB/10MPeCP2spZgAW2/aTg=
+github.com/Lz-Gustavo/beemport v0.0.0-20211113203951-10b1c2fdfa35 h1:ijReY6kRZArOKfih7axelxDwq586J25fJicLczRb9bA=
+github.com/Lz-Gustavo/beemport v0.0.0-20211113203951-10b1c2fdfa35/go.mod h1:qwF8dnsZh+p8u9zwXnZzuTB/10MPeCP2spZgAW2/aTg=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=
 github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24TaqPxmxbtue+5NUziq4I4S80YR8gNf3Q=

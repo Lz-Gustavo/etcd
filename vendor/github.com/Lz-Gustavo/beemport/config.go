@@ -26,9 +26,10 @@ const (
 )
 
 var (
-	ErrNoFilename       = errors.New("invalid config: if persistent storage (i.e. Inmem == false), config.Fname must be provided")
-	ErrNoLogPeriod      = errors.New("invalid config: if periodic reduce is set (i.e. Tick == Interval), a config.Period must be provided")
-	ErrNoSecondFilename = errors.New("invalid config: if parallel io is set (i.e. ParallelIO == true), config.secondFname must be provided")
+	ErrNoFilename        = errors.New("invalid config: if persistent storage (i.e. Inmem == false), config.Fname must be provided")
+	ErrNoLogPeriod       = errors.New("invalid config: if periodic reduce is set (i.e. Tick == Interval), a config.Period must be provided")
+	ErrNoSecondFilename  = errors.New("invalid config: if parallel io is set (i.e. ParallelIO == true), config.SecondFname must be provided")
+	ErrNoMeasureFilename = errors.New("invalid config: if latency measure is set (i.e. Measure == true), config.MeasureFname must be provided")
 )
 
 // LogConfig ...
@@ -36,13 +37,15 @@ type LogConfig struct {
 	Inmem   bool
 	KeepAll bool
 	Sync    bool
-	Measure bool
 	Tick    ReduceInterval
 	Period  uint32
 	Fname   string
 
 	ParallelIO  bool
 	SecondFname string
+
+	Measure      bool
+	MeasureFname string
 }
 
 // DefaultLogConfig ...
@@ -63,6 +66,9 @@ func (lc *LogConfig) ValidateConfig() error {
 	}
 	if lc.ParallelIO && lc.SecondFname == "" {
 		return ErrNoSecondFilename
+	}
+	if lc.Measure && lc.MeasureFname == "" {
+		return ErrNoMeasureFilename
 	}
 	return nil
 }

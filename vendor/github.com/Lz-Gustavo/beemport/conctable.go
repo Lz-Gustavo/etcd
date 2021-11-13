@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,8 +115,7 @@ func NewConcTableWithConfig(ctx context.Context, concLvl int, cfg *LogConfig) (*
 
 	if cfg.Measure {
 		ct.isMeasuringLat = true
-		fn := ct.logFolder + "bl-" + strconv.Itoa(int(cfg.Period)) + "-latency.out"
-		ct.latMeasure, err = newLatencyMeasure(concLvl, int(cfg.Period), fn)
+		ct.latMeasure, err = newLatencyMeasure(concLvl, int(cfg.Period), cfg.MeasureFname)
 		if err != nil {
 			return nil, err
 		}
