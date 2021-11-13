@@ -30,6 +30,10 @@ type latencyMeasure struct {
 	interval int
 	outFile  *os.File
 
+	counter    int
+	fillState  int
+	perstState int
+
 	initLat  [initArraySize]int64
 	writeLat [initArraySize]int64
 	fillLat  [initArraySize]int64
@@ -46,14 +50,6 @@ func newLatencyMeasure(concLvl, interval int, filename string) (*latencyMeasure,
 		interval: interval,
 		outFile:  fd,
 	}, nil
-}
-
-func (lm *latencyMeasure) notifyReceivedCommand() {
-	lm.absIndex++
-	if lm.absIndex%lm.interval == 1 || lm.interval == 1 {
-		lm.initLat[lm.msrIndex] = time.Now().UnixNano()
-		lm.drawn = true
-	}
 }
 
 func (lm *latencyMeasure) notifyReceivedCommandRand() {
@@ -96,6 +92,33 @@ func (lm *latencyMeasure) notifyTableFill() {
 
 func (lm *latencyMeasure) notifyTablePersistence(tableID int) {
 	lm.perstLat[tableID] = time.Now().UnixNano()
+}
+
+// notifyReceivedCommandETCD measures the received timestamp of any command within the
+// configured batch, and not only on the first command. This behavior differs from
+// notifyReceivedCommand() and its utilized as a server-side latency measurement instead
+// of conctable evaluation.
+func (lm *latencyMeasure) notifyReceivedCommandETCD() {
+	lm.initLat[lm.counter] = time.Now().UnixNano()
+}
+
+func (lm *latencyMeasure) notifyCommandWriteETCD() {
+	lm.writeLat[lm.counter] = time.Now().UnixNano()
+	lm.counter++
+}
+
+func (lm *latencyMeasure) notifyTableFillETCD() {
+	for i := lm.fillState; i < lm.counter; i++ {
+		lm.fillLat[i] = time.Now().UnixNano()
+	}
+	lm.fillState = lm.counter
+}
+
+func (lm *latencyMeasure) notifyTablePersistenceETCD() {
+	for i := lm.perstState; i < lm.counter; i++ {
+		lm.perstLat[i] = time.Now().UnixNano()
+	}
+	lm.perstState = lm.counter
 }
 
 func (lm *latencyMeasure) flush() error {

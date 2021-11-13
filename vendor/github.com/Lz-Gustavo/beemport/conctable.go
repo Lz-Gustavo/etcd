@@ -205,7 +205,7 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 
 	// first command
 	if mustMeasureLat {
-		ct.latMeasure.notifyReceivedCommand()
+		ct.latMeasure.notifyReceivedCommandETCD()
 	}
 
 	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
@@ -218,7 +218,7 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 	ct.cursorMu.Unlock()
 
 	if mustMeasureLat {
-		ct.latMeasure.notifyCommandWrite()
+		ct.latMeasure.notifyCommandWriteETCD()
 	}
 
 	// adjust first structure index
@@ -237,8 +237,8 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 	if willReduce {
 		// mutext will be later unlocked by the logger routine
 		if mustMeasureLat {
-			ct.latMeasure.notifyTableFill()
-			ct.loggerReq <- logEvent{cur, ct.latMeasure.msrIndex}
+			ct.latMeasure.notifyTableFillETCD()
+			ct.loggerReq <- logEvent{cur, 0}
 
 		} else {
 			ct.loggerReq <- logEvent{cur, -1}
@@ -411,6 +411,11 @@ func (ct *ConcTable) handleReduce(ctx context.Context, secDisk bool) {
 			err := ct.reduceLog(event.table, &count, secDisk)
 			if err != nil {
 				log.Fatalln("failed during reduce procedure, err:", err.Error())
+			}
+
+			if event.measure == 0 {
+				ct.latMeasure.notifyTablePersistenceETCD()
+				break
 			}
 
 			// requested latency measurement for persist
