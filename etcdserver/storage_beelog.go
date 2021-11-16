@@ -68,7 +68,7 @@ func init() {
 }
 
 func configBeelog() *beemport.LogConfig {
-	latFname := "/tmp/bl-" + strconv.Itoa(int(beelogBatchSize)) + "-latency.out"
+	latFname := "/tmp/bl-latency.out"
 
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
