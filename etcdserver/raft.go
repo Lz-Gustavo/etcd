@@ -259,6 +259,16 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// gofail: var raftAfterSaveSnap struct{}
 				}
 
+				// LGX: count timestamp before wal persistence
+				msr := false
+				if !beelogStorageEnable && isMeasuringLatency {
+					var ts int64
+					ts, msr = mayMeasureLat()
+					if msr {
+						fmt.Fprintln(latBuff, ts)
+					}
+				}
+
 				// gofail: var raftBeforeSave struct{}
 				//
 				// LGX: stable storage save is done here within the raft scope, once an entry is considered
@@ -274,8 +284,8 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					}
 				}
 
-				// LGX: count latency after wal persistence
-				if !beelogStorageEnable && isMeasuringLatency {
+				// LGX: count timestamp after wal persistence
+				if msr {
 					fmt.Fprintln(latBuff, time.Now().UnixNano())
 				}
 
