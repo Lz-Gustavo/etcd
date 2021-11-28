@@ -24,12 +24,14 @@ const (
 	defaultBeelogConcLevel = 2
 	defaultBeelogBatchSize = 1000
 	defaultBeelogLogsDir   = "/tmp/beelog"
+	defaultBeelogLatFile   = "/tmp/bl-latency.out"
 )
 
 var (
 	beelogBatchSize uint64
 	beelogConcLevel int
 	beelogLogsDir   string
+	beelogLatFile   string
 
 	beelogParallelIO         bool
 	beeelogSecondDiskLogsDir string
@@ -47,6 +49,12 @@ func init() {
 	if beelogConcLevel, err = strconv.Atoi(cl); err != nil {
 		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
 		beelogConcLevel = defaultBeelogConcLevel
+	}
+
+	beelogLatFile = os.Getenv("ETCD_BEELOG_LAT_FILE")
+	if beelogLatFile == "" {
+		log.Println("using default value for ETCD_BEELOG_LAT_FILE")
+		beelogLatFile = defaultBeelogLatFile
 	}
 
 	exists := false
@@ -68,8 +76,6 @@ func init() {
 }
 
 func configBeelog() *beemport.LogConfig {
-	latFname := "/tmp/bl-latency.out"
-
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
 		Sync:         false,
@@ -80,7 +86,7 @@ func configBeelog() *beemport.LogConfig {
 		ParallelIO:   beelogParallelIO,
 		SecondFname:  beeelogSecondDiskLogsDir + "/beelog.log",
 		Measure:      isMeasuringLatency,
-		MeasureFname: latFname,
+		MeasureFname: beelogLatFile,
 	}
 }
 
