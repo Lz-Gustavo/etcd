@@ -28,6 +28,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// LGX: different log strategies config, utilized mainly on the server
+// initialization for different Storage implementations
+type LogConfig int
+
+const (
+	NotWAL LogConfig = iota
+	StdWAL
+	BatchWAL
+	Beelog
+)
+
 type Storage interface {
 	// Save function saves ents and state to the underlying stable storage.
 	// Save MUST block until st and ents are on stable storage.

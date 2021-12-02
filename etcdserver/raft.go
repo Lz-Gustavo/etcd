@@ -261,7 +261,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				// LGX: count timestamp before wal persistence
 				msr := false
-				if len(rd.Entries) > 0 && !beelogStorageEnable && isMeasuringLatency {
+				if len(rd.Entries) > 0 && isMeasuringLatency {
 					var ts int64
 					ts, msr = mayMeasureLat()
 					if msr {
@@ -285,7 +285,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 
 				// LGX: count timestamp after wal persistence
-				if msr {
+				if logConfig != Beelog {
 					fmt.Fprintln(latBuff, time.Now().UnixNano())
 				}
 

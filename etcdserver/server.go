@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -69,8 +71,11 @@ import (
 // LGX: As the first two constants here declared, these represents a slightly modification
 // on etcd codebase to allow throughtput measuring during execution.
 var (
-	throughputFilename     = os.Getenv("ETCD_THR_FILE")
-	beelogStorageEnable, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_ENABLE"))
+	throughputFilename = os.Getenv("ETCD_THR_FILE")
+	logConfigEnv, _    = strconv.Atoi(os.Getenv("ETCD_LOG_CONFIG"))
+	logConfig          = LogConfig(logConfigEnv)
+
+	ErrInvalidLogConfig = errors.New("could not interpret profided log config, check ETCD_LOG_CONFIG env")
 )
 
 const (
@@ -550,13 +555,22 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		raftStorage: s,
 	}
 
-	if beelogStorageEnable {
-		// LGX: beelog storage interface
+	// LGX:
+	switch logConfig {
+	case NotWAL:
+		nodeCfg.storage = nil
+
+	case StdWAL:
+		nodeCfg.storage = NewStorage(w, ss)
+
+	case BatchWAL:
+		// TODO
+
+	case Beelog:
 		nodeCfg.storage = NewBeelogStorage()
 
-	} else {
-		// LGX: default storage
-		nodeCfg.storage = NewStorage(w, ss)
+	default:
+		log.Fatalln(ErrInvalidLogConfig.Error())
 	}
 	srv.r = *newRaftNode(nodeCfg)
 
