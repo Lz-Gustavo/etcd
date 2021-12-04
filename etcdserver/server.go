@@ -28,7 +28,6 @@ import (
 	"os"
 	"path"
 	"regexp"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,10 +70,7 @@ import (
 // LGX: As the first two constants here declared, these represents a slightly modification
 // on etcd codebase to allow throughtput measuring during execution.
 var (
-	throughputFilename = os.Getenv("ETCD_THR_FILE")
-	logConfigEnv, _    = strconv.Atoi(os.Getenv("ETCD_LOG_CONFIG"))
-	logConfig          = LogConfig(logConfigEnv)
-
+	throughputFilename  = os.Getenv("ETCD_THR_FILE")
 	ErrInvalidLogConfig = errors.New("could not interpret profided log config, check ETCD_LOG_CONFIG env")
 )
 
@@ -558,13 +554,13 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	// LGX:
 	switch logConfig {
 	case NotWAL:
-		nodeCfg.storage = nil
+		nodeCfg.storage = NewNotWALStorage()
 
 	case StdWAL:
 		nodeCfg.storage = NewStorage(w, ss)
 
 	case BatchWAL:
-		// TODO
+		nodeCfg.storage = NewBatchWALStorage(w)
 
 	case Beelog:
 		nodeCfg.storage = NewBeelogStorage()

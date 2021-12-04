@@ -16,6 +16,9 @@ package etcdserver
 
 import (
 	"io"
+	"log"
+	"os"
+	"strconv"
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
@@ -38,6 +41,26 @@ const (
 	BatchWAL
 	Beelog
 )
+
+const defaultLogBatchSize = 1000
+
+var (
+	logConfig    LogConfig
+	logBatchSize uint64
+)
+
+// LGX: initialization procedure for config envs
+func init() {
+	lc, _ := strconv.Atoi(os.Getenv("ETCD_LOG_CONFIG"))
+	logConfig = LogConfig(lc)
+
+	var err error
+	bs := os.Getenv("ETCD_LOG_BATCH_SIZE")
+	if logBatchSize, err = strconv.ParseUint(bs, 10, 32); err != nil {
+		log.Println("using default value for ETCD_LOG_BATCH_SIZE")
+		logBatchSize = defaultLogBatchSize
+	}
+}
 
 type Storage interface {
 	// Save function saves ents and state to the underlying stable storage.

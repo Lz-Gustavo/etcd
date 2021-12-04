@@ -2,8 +2,6 @@ package etcdserver
 
 // LGX:
 //   TODO: describe this storage implementation...
-//
-//   TODO2: later modify the current initialization of storage to utilize this implementation.
 
 import (
 	"context"
@@ -22,13 +20,11 @@ import (
 
 const (
 	defaultBeelogConcLevel = 2
-	defaultBeelogBatchSize = 1000
 	defaultBeelogLogsDir   = "/tmp/beelog"
 	defaultBeelogLatFile   = "/tmp/bl-latency.out"
 )
 
 var (
-	beelogBatchSize uint64
 	beelogConcLevel int
 	beelogLogsDir   string
 	beelogLatFile   string
@@ -39,12 +35,6 @@ var (
 
 func init() {
 	var err error
-	bs := os.Getenv("ETCD_BEELOG_BATCH_SIZE")
-	if beelogBatchSize, err = strconv.ParseUint(bs, 10, 32); err != nil {
-		log.Println("using default value for ETCD_BEELOG_BATCH_SIZE")
-		beelogBatchSize = defaultBeelogBatchSize
-	}
-
 	cl := os.Getenv("ETCD_BEELOG_CONC_LEVEL")
 	if beelogConcLevel, err = strconv.Atoi(cl); err != nil {
 		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
@@ -80,7 +70,7 @@ func configBeelog() *beemport.LogConfig {
 	return &beemport.LogConfig{
 		Sync:         false,
 		Tick:         beemport.Interval,
-		Period:       uint32(beelogBatchSize),
+		Period:       uint32(logBatchSize),
 		KeepAll:      true,
 		Fname:        beelogLogsDir + "/beelog.log",
 		ParallelIO:   beelogParallelIO,
