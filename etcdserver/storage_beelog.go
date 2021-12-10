@@ -68,7 +68,7 @@ func init() {
 func configBeelog() *beemport.LogConfig {
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
-		Sync:         false,
+		Sync:         true,
 		Tick:         beemport.Interval,
 		Period:       uint32(logBatchSize),
 		KeepAll:      true,

@@ -285,7 +285,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 
 				// LGX: count timestamp after wal persistence
-				if logConfig != Beelog {
+				if logConfig != Beelog && msr {
 					fmt.Fprintln(latBuff, time.Now().UnixNano())
 				}
 
