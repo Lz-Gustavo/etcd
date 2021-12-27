@@ -24,8 +24,6 @@ const (
 	// number of commands to wait until a complete state reset for Immediately
 	// reduce period.
 	resetOnImmediately int = 4000
-
-	loggerChanBuffSize int = 128
 )
 
 var (
@@ -66,7 +64,7 @@ func NewConcTable(ctx context.Context) *ConcTable {
 	c, cancel := context.WithCancel(ctx)
 	ct := &ConcTable{
 		cancel:    cancel,
-		loggerReq: make(chan logEvent, loggerChanBuffSize),
+		loggerReq: make(chan logEvent, defaultConcLvl),
 		concLevel: defaultConcLvl,
 
 		views: make([]stateTable, defaultConcLvl),
@@ -99,7 +97,7 @@ func NewConcTableWithConfig(ctx context.Context, concLvl int, cfg *LogConfig) (*
 	c, cancel := context.WithCancel(ctx)
 	ct := &ConcTable{
 		cancel:    cancel,
-		loggerReq: make(chan logEvent, loggerChanBuffSize),
+		loggerReq: make(chan logEvent, concLvl),
 		concLevel: concLvl,
 
 		views: make([]stateTable, concLvl),
@@ -191,20 +189,15 @@ func (ct *ConcTable) Log(cmd *pb.Entry) error {
 }
 
 // LogAndMeasureLat records the occurence of command 'cmd' on the provided
-// index and starts the latency measurement for the informed batch if 'mustMeasureLat'
-// is informed. This procedure allows the randomness of deciding wheter a
-// batch must be measured be implemented outside of this library (i.e. on
-// the caller scope), which allows for a complementary latency measurement rather
-// than an isolated one. The structure must be initialized with Measure flag
-// enabled, or else LogAndMeasureLat will panic.
-func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error {
+// index and measuremes the persisted timestamp for the informed batch if
+// 'mustMeasureLat' is informed. This procedure allows the randomness of
+// deciding wheter a batch must be measured be implemented outside of this
+// library (i.e. on the caller scope), which allows for a complementary latency
+// measurement rather than an isolated one. The structure must be initialized
+// with Measure flag enabled, or else LogAndMeasureLat will panic.
+func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) (bool, error) {
 	ct.cursorMu.Lock()
 	cur := ct.cursor
-
-	// first command
-	if mustMeasureLat {
-		ct.latMeasure.notifyReceivedCommandETCD()
-	}
 
 	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
 	if advance {
@@ -214,10 +207,6 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 	// must acquire view mutex before releasing cursor to ensure safety
 	ct.mu[cur].Lock()
 	ct.cursorMu.Unlock()
-
-	if mustMeasureLat {
-		ct.latMeasure.notifyCommandWriteETCD()
-	}
 
 	// adjust first structure index
 	if !ct.logs[cur].logged {
@@ -235,17 +224,17 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 	if willReduce {
 		// mutext will be later unlocked by the logger routine
 		if mustMeasureLat {
-			ct.latMeasure.notifyTableFillETCD()
-			ct.loggerReq <- logEvent{cur, 0}
+			ct.loggerReq <- logEvent{cur, ct.latMeasure.msrIndex}
+			ct.latMeasure.msrIndex++
 
 		} else {
 			ct.loggerReq <- logEvent{cur, -1}
 		}
-		return nil
+		return true, nil
 	}
 
 	ct.mu[cur].Unlock()
-	return nil
+	return false, nil
 }
 
 // Recov returns a compacted log of commands, following the requested [p, n]
@@ -409,11 +398,6 @@ func (ct *ConcTable) handleReduce(ctx context.Context, secDisk bool) {
 			err := ct.reduceLog(event.table, &count, secDisk)
 			if err != nil {
 				log.Fatalln("failed during reduce procedure, err:", err.Error())
-			}
-
-			if event.measure == 0 {
-				ct.latMeasure.notifyTablePersistenceETCD()
-				break
 			}
 
 			// requested latency measurement for persist

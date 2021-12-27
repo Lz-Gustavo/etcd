@@ -118,8 +118,14 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			fmt.Fprintln(latBuff, ts)
 		}
 
-		if err := bs.wal.LogAndMeasureLat(bent, msr); err != nil {
+		isLastCommand, err := bs.wal.LogAndMeasureLat(bent, msr)
+		if err != nil {
 			return err
+		}
+
+		// 0 indicates that the previous measurement was the last command of that batch
+		if msr && isLastCommand {
+			fmt.Fprintln(latBuff, 0)
 		}
 	}
 	return nil
