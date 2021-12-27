@@ -284,8 +284,9 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					}
 				}
 
-				// LGX: count timestamp after wal persistence
-				if logConfig != Beelog && msr {
+				// LGX: count timestamp after wal persistence, only on StdWal config. The other storage implementations
+				// capture the persisted timestamp from within its Save() method.
+				if logConfig == StdWAL && msr {
 					fmt.Fprintln(latBuff, time.Now().UnixNano())
 				}
 

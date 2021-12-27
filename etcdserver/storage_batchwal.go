@@ -1,6 +1,9 @@
 package etcdserver
 
 import (
+	"fmt"
+	"time"
+
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
 )
@@ -33,6 +36,8 @@ func (sb *batchWALStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error 
 	sb.count = 0
 	// keeps the underlying array
 	sb.buff = sb.buff[:0]
+
+	fmt.Fprintln(latBuff, time.Now().UnixNano())
 	return err
 }
 
