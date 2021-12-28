@@ -3,7 +3,7 @@ module go.etcd.io/etcd
 go 1.14
 
 require (
-	github.com/Lz-Gustavo/beemport v0.0.0-20211227221112-891bf37056bf
+	github.com/Lz-Gustavo/beemport v0.0.0-20211228130226-1ee44c890629
 	github.com/bgentry/speakeasy v0.1.0
 	github.com/cockroachdb/datadriven v0.0.0-20190809214429-80d97fb3cbaa
 	github.com/coreos/go-semver v0.2.0

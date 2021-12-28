@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -15,7 +16,7 @@ const (
 	measureChance int = 1
 
 	// 1kk measurements on 4 arrays of 64bits values, 32MB total
-	initArraySize = 1000000
+	arraySize = 1000000
 )
 
 func init() {
@@ -25,16 +26,18 @@ func init() {
 // latencyMeasure holds auxiliar variables to implement an in-deep latency analysis
 // on ConcTable operations.
 type latencyMeasure struct {
-	drawn    bool
-	absIndex int
-	msrIndex int
-	interval int
-	outFile  *os.File
+	drawn     bool
+	absIndex  int
+	msrIndex  int
+	interval  int
+	tableMark []bool
+	outFile   *os.File
 
-	initLat  [initArraySize]int64
-	writeLat [initArraySize]int64
-	fillLat  [initArraySize]int64
-	perstLat [initArraySize]int64
+	initLat  [arraySize]int64
+	writeLat [arraySize]int64
+	fillLat  [arraySize]int64
+	perstLat [arraySize]int64
+	perstMu  sync.Mutex
 }
 
 func newLatencyMeasure(concLvl, interval int, filename string) (*latencyMeasure, error) {
@@ -44,12 +47,17 @@ func newLatencyMeasure(concLvl, interval int, filename string) (*latencyMeasure,
 	}
 
 	return &latencyMeasure{
-		interval: interval,
-		outFile:  fd,
+		interval:  interval,
+		outFile:   fd,
+		tableMark: make([]bool, concLvl),
 	}, nil
 }
 
 func (lm *latencyMeasure) notifyReceivedCommandRand() {
+	if lm.msrIndex >= arraySize {
+		return
+	}
+
 	lm.absIndex++
 	if (lm.absIndex%lm.interval == 1 || lm.interval == 1) && rand.Intn(measureChance) == 0 {
 		lm.initLat[lm.msrIndex] = time.Now().UnixNano()
@@ -88,12 +96,34 @@ func (lm *latencyMeasure) notifyTableFill() {
 }
 
 func (lm *latencyMeasure) notifyTablePersistence(msrIndex int) {
-	lm.perstLat[msrIndex] = time.Now().UnixNano()
+	if msrIndex >= arraySize {
+		return
+	}
+
+	t := time.Now().UnixNano()
+	lm.perstMu.Lock()
+	lm.perstLat[msrIndex] = t
+	lm.perstMu.Unlock()
+}
+
+func (lm *latencyMeasure) notifyReceivedCommandOnTable(tableID int) {
+	lm.tableMark[tableID] = true
+}
+
+func (lm *latencyMeasure) mustMeasurePersistenceOnTable(tableID int) bool {
+	if lm.tableMark[tableID] {
+		lm.tableMark[tableID] = false
+		return true
+	}
+	return false
 }
 
 func (lm *latencyMeasure) flush() error {
 	var err error
 	buff := bytes.NewBuffer(nil)
+
+	lm.perstMu.Lock()
+	defer lm.perstMu.Unlock()
 
 	for i, init := range lm.initLat {
 		w := lm.writeLat[i]

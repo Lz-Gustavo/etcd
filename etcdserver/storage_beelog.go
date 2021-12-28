@@ -123,8 +123,9 @@ func (bs *beelogStorage) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 			return err
 		}
 
-		// 0 indicates that the previous measurement was the last command of that batch
-		if msr && isLastCommand {
+		// 0 indicates that the previous measurement was the last command of that batch,
+		// must log the mark even if 'msr' is unset
+		if isLastCommand {
 			fmt.Fprintln(latBuff, 0)
 		}
 	}

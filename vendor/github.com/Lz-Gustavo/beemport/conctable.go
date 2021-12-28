@@ -199,6 +199,11 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) (bool,
 	ct.cursorMu.Lock()
 	cur := ct.cursor
 
+	// mark this table as 'measured'
+	if mustMeasureLat {
+		ct.latMeasure.notifyReceivedCommandOnTable(cur)
+	}
+
 	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
 	if advance {
 		ct.advanceCurrentView()
@@ -223,7 +228,7 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) (bool,
 
 	if willReduce {
 		// mutext will be later unlocked by the logger routine
-		if mustMeasureLat {
+		if ct.latMeasure.mustMeasurePersistenceOnTable(cur) {
 			ct.loggerReq <- logEvent{cur, ct.latMeasure.msrIndex}
 			ct.latMeasure.msrIndex++
 
