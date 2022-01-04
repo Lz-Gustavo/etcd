@@ -25,6 +25,7 @@ const (
 )
 
 var (
+	syncIO          bool
 	beelogConcLevel int
 	beelogLogsDir   string
 	beelogLatFile   string
@@ -53,6 +54,11 @@ func init() {
 		beelogLogsDir = defaultBeelogLogsDir
 	}
 
+	syncIO, _ = strconv.ParseBool(os.Getenv("ETCD_SYNC_IO"))
+	if syncIO {
+		log.Println("ETCD_SYNC_IO enabled for beelog")
+	}
+
 	beelogParallelIO, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
 	if !beelogParallelIO {
 		return
@@ -68,7 +74,7 @@ func init() {
 func configBeelog() *beemport.LogConfig {
 	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
-		Sync:         false,
+		Sync:         syncIO,
 		Tick:         beemport.Interval,
 		Period:       uint32(logBatchSize),
 		KeepAll:      true,
