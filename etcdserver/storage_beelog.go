@@ -24,65 +24,46 @@ const (
 	defaultBeelogLatFile   = "/tmp/bl-latency.out"
 )
 
-var (
-	syncIO          bool
-	beelogConcLevel int
-	beelogLogsDir   string
-	beelogLatFile   string
-
-	beelogParallelIO         bool
-	beeelogSecondDiskLogsDir string
-)
-
-func init() {
-	var err error
-	cl := os.Getenv("ETCD_BEELOG_CONC_LEVEL")
-	if beelogConcLevel, err = strconv.Atoi(cl); err != nil {
-		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
-		beelogConcLevel = defaultBeelogConcLevel
-	}
-
-	beelogLatFile = os.Getenv("ETCD_BEELOG_LAT_FILE")
-	if beelogLatFile == "" {
+func getBeelogConfig() *beemport.LogConfig {
+	latFname := os.Getenv("ETCD_BEELOG_LAT_FILE")
+	if latFname == "" {
 		log.Println("using default value for ETCD_BEELOG_LAT_FILE")
-		beelogLatFile = defaultBeelogLatFile
+		latFname = defaultBeelogLatFile
 	}
 
-	exists := false
-	if beelogLogsDir, exists = os.LookupEnv("ETCD_BEELOG_LOGS_DIR"); !exists {
+	logsDir, exists := os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
+	if !exists {
 		log.Println("using default value for ETCD_BEELOG_LOGS_DIR")
-		beelogLogsDir = defaultBeelogLogsDir
+		logsDir = defaultBeelogLogsDir
 	}
 
-	syncIO, _ = strconv.ParseBool(os.Getenv("ETCD_SYNC_IO"))
+	syncIO, _ := strconv.ParseBool(os.Getenv("ETCD_SYNC_IO"))
 	if syncIO {
 		log.Println("ETCD_SYNC_IO enabled for beelog")
 	}
 
-	beelogParallelIO, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
-	if !beelogParallelIO {
-		return
+	var secondDiskLogsDir string
+	parallelIO, _ := strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
+	if parallelIO {
+		log.Println("ETCD_BEELOG_PARALLEL_IO enabled")
+
+		secondDiskLogsDir, exists = os.LookupEnv("ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
+		if !exists {
+			log.Println("using default value for ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
+			secondDiskLogsDir = defaultBeelogLogsDir
+		}
 	}
 
-	log.Println("ETCD_BEELOG_PARALLEL_IO enabled")
-	if beeelogSecondDiskLogsDir, exists = os.LookupEnv("ETCD_BEELOG_SECOND_DISK_LOGS_DIR"); !exists {
-		log.Println("using default value for ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
-		beeelogSecondDiskLogsDir = defaultBeelogLogsDir
-	}
-}
-
-func configBeelog() *beemport.LogConfig {
-	// NOTE: zero values are only declared for documentation purposes
 	return &beemport.LogConfig{
 		Sync:         syncIO,
 		Tick:         beemport.Interval,
 		Period:       uint32(logBatchSize),
 		KeepAll:      true,
-		Fname:        beelogLogsDir + "/beelog.log",
-		ParallelIO:   beelogParallelIO,
-		SecondFname:  beeelogSecondDiskLogsDir + "/beelog.log",
+		Fname:        logsDir + "/beelog.log",
+		ParallelIO:   parallelIO,
+		SecondFname:  secondDiskLogsDir + "/beelog.log",
 		Measure:      isMeasuringLatency,
-		MeasureFname: beelogLatFile,
+		MeasureFname: latFname,
 	}
 }
 
@@ -92,7 +73,13 @@ type beelogStorage struct {
 }
 
 func NewBeelogStorage() Storage {
-	ct, err := beemport.NewConcTableWithConfig(context.Background(), beelogConcLevel, configBeelog())
+	concLevel, err := strconv.Atoi(os.Getenv("ETCD_BEELOG_CONC_LEVEL"))
+	if err != nil {
+		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
+		concLevel = defaultBeelogConcLevel
+	}
+
+	ct, err := beemport.NewConcTableWithConfig(context.Background(), concLevel, getBeelogConfig())
 	if err != nil {
 		log.Fatalln("failed initializing ConcTable structure, err:", err.Error())
 	}
