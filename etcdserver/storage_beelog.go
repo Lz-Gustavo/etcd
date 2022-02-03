@@ -4,7 +4,9 @@ package etcdserver
 //   TODO: describe this storage implementation...
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -160,18 +162,28 @@ func convertRaftEntryIntoBeelogEntry(entry raftpb.Entry) *beelogpb.Entry {
 	var bent *beelogpb.Entry
 	isWriteOp := raftReq.Put != nil
 	if isWriteOp {
+		key, err := binary.ReadVarint(bytes.NewReader(raftReq.Put.Key))
+		if err != nil {
+			return nil
+		}
+
 		bent = &beelogpb.Entry{
 			Id:      entry.Index,
-			Key:     string(raftReq.Put.Key),
+			Key:     key,
 			WriteOp: isWriteOp,
 			Command: entry.Data,
 		}
 		return bent
 	}
 
+	key, err := binary.ReadVarint(bytes.NewReader(raftReq.Range.Key))
+	if err != nil {
+		return nil
+	}
+
 	bent = &beelogpb.Entry{
 		Id:      entry.Index,
-		Key:     string(raftReq.Range.Key),
+		Key:     key,
 		WriteOp: false,
 	}
 	return bent

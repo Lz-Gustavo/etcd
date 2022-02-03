@@ -39,7 +39,7 @@ type logEvent struct {
 
 // stateTable is a minimal format of an ordinary stateTable, storing only
 // the lates state for each key.
-type stateTable map[string]*pb.Entry
+type stateTable map[int64]*pb.Entry
 
 // ConcTable ...
 type ConcTable struct {

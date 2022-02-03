@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/Lz-Gustavo/beemport/pb"
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 var ErrSecondaryDiskWrite = errors.New("cannot persist to secondary disk if ParallelIO is unset")
