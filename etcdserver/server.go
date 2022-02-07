@@ -552,6 +552,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 
 	// LGX:
+	parseLogConfigFromENV()
 	switch logConfig {
 	case NotWAL:
 		nodeCfg.storage = NewNotWALStorage()

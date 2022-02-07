@@ -49,8 +49,8 @@ var (
 	logBatchSize uint64
 )
 
-// LGX: initialization procedure for config envs
-func init() {
+// LGX: initialization procedure for config envs, called on NewServer()
+func parseLogConfigFromENV() {
 	lc, _ := strconv.Atoi(os.Getenv("ETCD_LOG_CONFIG"))
 	logConfig = LogConfig(lc)
 
