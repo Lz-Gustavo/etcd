@@ -608,9 +608,13 @@ func (s *EtcdServer) doSerialize(ctx context.Context, chk func(*auth.AuthInfo) e
 
 // LGX: procedure that proposes client requests to Raft and waits to trigger its responses
 func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.InternalRaftRequest) (*applyResult, error) {
+	//fmt.Printf("\n====v3_server: proposing raft request\n")
+	//fmt.Println("----PUT---:.", string(r.Put.Key), string(r.Put.Value))
+
 	ai := s.getAppliedIndex()
 	ci := s.getCommittedIndex()
 	if ci > ai+maxGapBetweenApplyAndCommitIndex {
+		//fmt.Println("====v3_server ERROR: TOO MUCH GAP!!!")
 		return nil, ErrTooManyRequests
 	}
 
@@ -660,6 +664,7 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 		// LGX: (1) here it its waits for Raft delivery -> apply -> WAL persistence.
 		// If we find a wait to delay calling s.w.Trigger() with the same ID as registered
 		// on line 643 until a batch is Save... maybe we can measure etcd.
+		//fmt.Println("====v3_server: got proper response")
 		return x.(*applyResult), nil
 
 	case <-cctx.Done():

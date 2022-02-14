@@ -180,7 +180,9 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 			case <-r.ticker.C:
 				r.tick()
 			case rd := <-r.Ready():
-				fmt.Println("RECEIVED READY!")
+				fmt.Printf("raft: RECEIVED READY!\n")
+				fmt.Println("raft: COMMITED:", len(rd.CommittedEntries))
+				fmt.Println("raft: ENTRIES:", len(rd.Entries))
 
 				if rd.SoftState != nil {
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
@@ -223,19 +225,20 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					notifyc:  notifyc,
 				}
 				applies := []apply{ap}
+
 				// LGX: mark as commited, even though it wasnt applied yet
-				updateCommittedIndex(&ap, rh)
+				//updateCommittedIndex(&ap, rh)
 
 				mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
 				if isBatchEnabled && !mustIgnoreEntry {
-					fmt.Println("====analysing batch")
+					fmt.Println("====batch: analysing batch")
 
 					inc := len(rd.Entries)
 					if inc == 0 && hasReadRequest {
 						inc = 1
 					}
 
-					fmt.Println("====incrementing:", inc)
+					fmt.Println("====batch: incrementing:", inc)
 					count += inc
 					entriesBatch = append(entriesBatch, rd.Entries...)
 					appliesBatch = append(appliesBatch, ap)
@@ -247,13 +250,21 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 						// TODO: for some reason read requests are still not advancing the protocol
 						// state when not applied, investigate later
 
-						fmt.Println("====advancing without logging...")
+						fmt.Println("====batch: advancing without logging...")
+						if islead {
+							// gofail: var raftBeforeLeaderSend struct{}
+							r.transport.Send(r.processMessages(rd.Messages))
+						}
+
+						// notify apply routine
+						notifyc <- struct{}{}
+
 						r.raftStorage.Append(rd.Entries)
 						r.Advance()
 						break
 					}
 
-					fmt.Println("====BATCH FILLED!")
+					fmt.Println("====batch: BATCH FILLED!")
 					entries = entriesBatch
 					reads = readsBatch
 					applies = appliesBatch
@@ -261,6 +272,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				// LGX:
 				// NOTE: serving linearizable read requests
+				fmt.Println("====raft: applying", len(reads), "reads!")
 				for _, read := range reads {
 					select {
 					case r.readStateC <- read:
@@ -278,7 +290,9 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				// LGX:
 				// NOTE: here it basically applies the previously commited write entries while continues to
 				// persist the hard state on this same routine (as stated on the comment below)
+				fmt.Println("====raft: applying", len(applies), "writes!")
 				for _, apl := range applies {
+					updateCommittedIndex(&apl, rh)
 					select {
 					case r.applyc <- apl:
 					case <-r.stopped:
@@ -423,7 +437,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				// LGX:
 				if isBatchEnabled {
-					fmt.Println("====reseting batch info")
+					fmt.Println("====batch: reseting batch")
 					count = 0
 					entriesBatch = entriesBatch[:0]
 					appliesBatch = appliesBatch[:0]
