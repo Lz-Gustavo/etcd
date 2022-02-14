@@ -606,6 +606,7 @@ func (s *EtcdServer) doSerialize(ctx context.Context, chk func(*auth.AuthInfo) e
 	return nil
 }
 
+// LGX: procedure that proposes client requests to Raft and waits to trigger its responses
 func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.InternalRaftRequest) (*applyResult, error) {
 	ai := s.getAppliedIndex()
 	ci := s.getCommittedIndex()
@@ -656,7 +657,11 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 
 	select {
 	case x := <-ch:
+		// LGX: (1) here it its waits for Raft delivery -> apply -> WAL persistence.
+		// If we find a wait to delay calling s.w.Trigger() with the same ID as registered
+		// on line 643 until a batch is Save... maybe we can measure etcd.
 		return x.(*applyResult), nil
+
 	case <-cctx.Done():
 		proposalsFailed.Inc()
 		s.w.Trigger(id, nil) // GC wait

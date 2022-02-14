@@ -2373,6 +2373,8 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 			Alarm:    pb.AlarmType_NOSPACE,
 		}
 		s.raftRequest(s.ctx, pb.InternalRaftRequest{Alarm: a})
+		// LGX: here it applies and notifies the client routine to send
+		// response, as stated on v3_server (1)
 		s.w.Trigger(id, ar)
 	})
 }
