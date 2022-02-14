@@ -278,7 +278,10 @@ func (c *ServerConfig) ShouldDiscover() bool { return c.DiscoveryURL != "" }
 func (c *ServerConfig) ReqTimeout() time.Duration {
 	// 5s for queue waiting, computation and disk IO delay
 	// + 2 * election timeout for possible leader election
-	return 5*time.Second + 2*time.Duration(c.ElectionTicks*int(c.TickMs))*time.Millisecond
+	// return 5*time.Second + 2*time.Duration(c.ElectionTicks*int(c.TickMs))*time.Millisecond
+
+	// LGX: changed from 5 to 30 to consider max batch fill time
+	return 30*time.Second + 2*time.Duration(c.ElectionTicks*int(c.TickMs))*time.Millisecond
 }
 
 func (c *ServerConfig) electionTimeout() time.Duration {

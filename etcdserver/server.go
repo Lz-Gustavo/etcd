@@ -561,7 +561,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		nodeCfg.storage = NewStorage(w, ss)
 
 	case BatchWAL:
-		nodeCfg.storage = NewBatchWALStorage(w)
+		//nodeCfg.storage = NewBatchWALStorage(w)
+		nodeCfg.storage = NewStorage(w, ss)
 
 	case Beelog:
 		nodeCfg.storage = NewBeelogStorage()
