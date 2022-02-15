@@ -46,7 +46,7 @@ const defaultLogBatchSize = 1000
 
 var (
 	logConfig    LogConfig
-	logBatchSize uint64
+	logBatchSize int
 )
 
 // LGX: initialization procedure for config envs, called on NewServer()
@@ -56,7 +56,7 @@ func parseLogConfigFromENV() {
 
 	var err error
 	bs := os.Getenv("ETCD_LOG_BATCH_SIZE")
-	if logBatchSize, err = strconv.ParseUint(bs, 10, 32); err != nil {
+	if logBatchSize, err = strconv.Atoi(bs); err != nil {
 		log.Println("using default value for ETCD_LOG_BATCH_SIZE")
 		logBatchSize = defaultLogBatchSize
 	}

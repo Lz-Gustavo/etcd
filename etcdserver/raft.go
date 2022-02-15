@@ -168,21 +168,28 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 		// LGX:
 		isBatchEnabled := logConfig == BatchWAL || logConfig == Beelog
-		entriesBatch := make([]raftpb.Entry, 0, int(logBatchSize))
-		appliesBatch := make([]apply, 0)
-		readsBatch := make([]raft.ReadState, 0)
+		entriesBatch := make([]raftpb.Entry, 0, logBatchSize)
+		appliesBatch := make([]apply, 0, logBatchSize)
+		readsBatch := make([]raft.ReadState, 0, logBatchSize)
 
 		ignoreIndex := uint64(4)
 		count := 0
+
+		var (
+			entries *[]raftpb.Entry
+			reads   *[]raft.ReadState
+			applies *[]apply
+		)
 
 		for {
 			select {
 			case <-r.ticker.C:
 				r.tick()
 			case rd := <-r.Ready():
-				fmt.Printf("raft: RECEIVED READY!\n")
-				fmt.Println("raft: COMMITED:", len(rd.CommittedEntries))
-				fmt.Println("raft: ENTRIES:", len(rd.Entries))
+				// LGX: ill keep these 'dirty' outputs for a while, until I fix linearizable reads :(
+				//fmt.Printf("raft: RECEIVED READY!\n")
+				//fmt.Println("raft: COMMITED:", len(rd.CommittedEntries))
+				//fmt.Println("raft: ENTRIES:", len(rd.Entries))
 
 				if rd.SoftState != nil {
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
@@ -207,50 +214,35 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					r.td.Reset()
 				}
 
-				// LGX: initialize variables used by raft on normal execution
-				entries := rd.Entries
-				var readPtr *raft.ReadState
-				var reads []raft.ReadState
-
-				hasReadRequest := len(rd.ReadStates) != 0
-				if hasReadRequest {
-					readPtr = &rd.ReadStates[len(rd.ReadStates)-1]
-					reads = append(reads, *readPtr)
-				}
-
 				notifyc := make(chan struct{}, 1)
 				ap := apply{
 					entries:  rd.CommittedEntries,
 					snapshot: rd.Snapshot,
 					notifyc:  notifyc,
 				}
-				applies := []apply{ap}
 
-				// LGX: mark as commited, even though it wasnt applied yet
-				//updateCommittedIndex(&ap, rh)
-
+				hasReadRequest := len(rd.ReadStates) != 0
 				mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-				if isBatchEnabled && !mustIgnoreEntry {
-					fmt.Println("====batch: analysing batch")
 
+				if isBatchEnabled && !mustIgnoreEntry {
+					//fmt.Println("====batch: analysing batch")
 					inc := len(rd.Entries)
 					if inc == 0 && hasReadRequest {
 						inc = 1
 					}
 
-					fmt.Println("====batch: incrementing:", inc)
 					count += inc
 					entriesBatch = append(entriesBatch, rd.Entries...)
 					appliesBatch = append(appliesBatch, ap)
-					if readPtr != nil {
-						readsBatch = append(readsBatch, *readPtr)
+					if hasReadRequest {
+						readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
 					}
 
-					if count < int(logBatchSize) {
+					if count < logBatchSize {
 						// TODO: for some reason read requests are still not advancing the protocol
 						// state when not applied, investigate later
 
-						fmt.Println("====batch: advancing without logging...")
+						//fmt.Println("====batch: advancing without logging...")
 						if islead {
 							// gofail: var raftBeforeLeaderSend struct{}
 							r.transport.Send(r.processMessages(rd.Messages))
@@ -264,16 +256,25 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 						break
 					}
 
-					fmt.Println("====batch: BATCH FILLED!")
-					entries = entriesBatch
-					reads = readsBatch
-					applies = appliesBatch
+					//fmt.Println("====batch: BATCH FILLED!")
+					entries = &entriesBatch
+					reads = &readsBatch
+					applies = &appliesBatch
+
+				} else {
+					// LGX: variables are on the same state as previously implemented by etcd
+					entries = &rd.Entries
+					reads = &[]raft.ReadState{}
+					applies = &[]apply{ap}
+
+					if hasReadRequest {
+						*reads = append(*reads, rd.ReadStates[len(rd.ReadStates)-1])
+					}
 				}
 
 				// LGX:
 				// NOTE: serving linearizable read requests
-				fmt.Println("====raft: applying", len(reads), "reads!")
-				for _, read := range reads {
+				for _, read := range *reads {
 					select {
 					case r.readStateC <- read:
 					case <-time.After(internalTimeout):
@@ -290,8 +291,10 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				// LGX:
 				// NOTE: here it basically applies the previously commited write entries while continues to
 				// persist the hard state on this same routine (as stated on the comment below)
-				fmt.Println("====raft: applying", len(applies), "writes!")
-				for _, apl := range applies {
+				//
+				// TODO: investigate how can commands be considered as "commited" (i.e. arrive on rd.CommitedEntries)
+				// even though 'updateCommittedIndex' wasnt called up until now...
+				for _, apl := range *applies {
 					updateCommittedIndex(&apl, rh)
 					select {
 					case r.applyc <- apl:
@@ -324,7 +327,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				// LGX: count timestamp before wal persistence
 				msr := false
-				if logConfig != Beelog && len(rd.Entries) > 0 && isMeasuringLatency {
+				if isMeasuringLatency && logConfig != Beelog && len(rd.Entries) > 0 {
 					var ts int64
 					ts, msr = mayMeasureLat()
 					if msr {
@@ -339,7 +342,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				//
 				// NOTE: If the ETCD_BEELOG_ENABLE env is set, the storage interface is initialized with beemport,
 				// so basically the storage.Save() here intrinsically calls beemport.Log() through a wrapper
-				if err := r.storage.Save(rd.HardState, entries); err != nil {
+				if err := r.storage.Save(rd.HardState, *entries); err != nil {
 					if r.lg != nil {
 						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 					} else {
@@ -435,9 +438,8 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					notifyc <- struct{}{}
 				}
 
-				// LGX:
+				// LGX: reset batch keeping the underlying arrays
 				if isBatchEnabled {
-					fmt.Println("====batch: reseting batch")
 					count = 0
 					entriesBatch = entriesBatch[:0]
 					appliesBatch = appliesBatch[:0]

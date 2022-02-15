@@ -14,8 +14,10 @@ import (
 
 const (
 	defaultLatencyFilename = "~/etcd-latency.out"
-	isMeasuringLatency     = true
-	latMeasureChance       = 10
+
+	// NOTE: changing for now while testing etcd benchmark
+	isMeasuringLatency = false
+	latMeasureChance   = 10
 )
 
 var (
