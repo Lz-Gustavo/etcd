@@ -160,7 +160,7 @@ func (r *raftNode) tick() {
 // start prepares and starts raftNode in a new goroutine. It is no longer safe
 // to modify the fields after it has been started.
 func (r *raftNode) start(rh *raftReadyHandler) {
-	internalTimeout := time.Second
+	internalTimeoutOnReads := 30 * time.Second
 
 	go func() {
 		defer r.onStop()
@@ -270,36 +270,32 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if hasReadRequest {
 						*reads = append(*reads, rd.ReadStates[len(rd.ReadStates)-1])
 					}
-				}
 
-				// LGX:
-				// NOTE: serving linearizable read requests
-				for _, read := range *reads {
-					select {
-					case r.readStateC <- read:
-					case <-time.After(internalTimeout):
-						if r.lg != nil {
-							r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeout))
-						} else {
-							plog.Warningf("timed out sending read state")
+					// LGX:
+					// NOTE: serving linearizable read requests
+					for _, read := range *reads {
+						select {
+						case r.readStateC <- read:
+						case <-time.After(internalTimeoutOnReads):
+							if r.lg != nil {
+								r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
+							} else {
+								plog.Warningf("timed out sending read state")
+							}
+						case <-r.stopped:
+							return
 						}
-					case <-r.stopped:
-						return
 					}
-				}
 
-				// LGX:
-				// NOTE: here it basically applies the previously commited write entries while continues to
-				// persist the hard state on this same routine (as stated on the comment below)
-				//
-				// TODO: investigate how can commands be considered as "commited" (i.e. arrive on rd.CommitedEntries)
-				// even though 'updateCommittedIndex' wasnt called up until now...
-				for _, apl := range *applies {
-					updateCommittedIndex(&apl, rh)
-					select {
-					case r.applyc <- apl:
-					case <-r.stopped:
-						return
+					// LGX: here it basically applies the previously commited write entries while continues to
+					// persist the hard state on this same routine (as stated on the comment below)
+					for _, apl := range *applies {
+						updateCommittedIndex(&apl, rh)
+						select {
+						case r.applyc <- apl:
+						case <-r.stopped:
+							return
+						}
 					}
 				}
 
@@ -438,8 +434,35 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					notifyc <- struct{}{}
 				}
 
-				// LGX: reset batch keeping the underlying arrays
+				// LGX: on batch config, applies must be sent AFTER commands are successfully
+				// written to stable storage.
 				if isBatchEnabled {
+					if !mustIgnoreEntry {
+						for _, read := range *reads {
+							select {
+							case r.readStateC <- read:
+							case <-time.After(internalTimeoutOnReads):
+								if r.lg != nil {
+									r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
+								} else {
+									plog.Warningf("timed out sending read state")
+								}
+							case <-r.stopped:
+								return
+							}
+						}
+
+						for _, apl := range *applies {
+							updateCommittedIndex(&apl, rh)
+							select {
+							case r.applyc <- apl:
+							case <-r.stopped:
+								return
+							}
+						}
+					}
+
+					// reset batch and keep underlying array
 					count = 0
 					entriesBatch = entriesBatch[:0]
 					appliesBatch = appliesBatch[:0]
