@@ -160,119 +160,498 @@ func (r *raftNode) tick() {
 // start prepares and starts raftNode in a new goroutine. It is no longer safe
 // to modify the fields after it has been started.
 func (r *raftNode) start(rh *raftReadyHandler) {
-	internalTimeoutOnReads := 30 * time.Second
+	switch logConfig {
+	case BatchWAL:
+		go r.startBatchWAL(rh)
 
-	go func() {
-		defer r.onStop()
-		islead := false
+	case Beelog:
+		go r.startBeelog(rh)
 
-		// LGX:
-		isBatchEnabled := logConfig == BatchWAL || logConfig == Beelog
-		entriesBatch := make([]raftpb.Entry, 0, logBatchSize)
-		appliesBatch := make([]apply, 0, logBatchSize)
-		readsBatch := make([]raft.ReadState, 0, logBatchSize)
+	default:
+		go r.startStdWAL(rh)
+	}
+}
 
-		ignoreIndex := uint64(4)
-		count := 0
+// LGX: startStdWal is the standart raft implmentation ...
+func (r *raftNode) startStdWAL(rh *raftReadyHandler) {
+	internalTimeout := time.Second
 
-		var (
-			entries *[]raftpb.Entry
-			reads   *[]raft.ReadState
-			applies *[]apply
-		)
+	defer r.onStop()
+	islead := false
 
-		for {
+	for {
+		select {
+		case <-r.ticker.C:
+			r.tick()
+		case rd := <-r.Ready():
+			if rd.SoftState != nil {
+				newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
+				if newLeader {
+					leaderChanges.Inc()
+				}
+
+				if rd.SoftState.Lead == raft.None {
+					hasLeader.Set(0)
+				} else {
+					hasLeader.Set(1)
+				}
+
+				rh.updateLead(rd.SoftState.Lead)
+				islead = rd.RaftState == raft.StateLeader
+				if islead {
+					isLeader.Set(1)
+				} else {
+					isLeader.Set(0)
+				}
+				rh.updateLeadership(newLeader)
+				r.td.Reset()
+			}
+
+			if len(rd.ReadStates) != 0 {
+				select {
+				case r.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
+				case <-time.After(internalTimeout):
+					if r.lg != nil {
+						r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeout))
+					} else {
+						plog.Warningf("timed out sending read state")
+					}
+				case <-r.stopped:
+					return
+				}
+			}
+
+			notifyc := make(chan struct{}, 1)
+			ap := apply{
+				entries:  rd.CommittedEntries,
+				snapshot: rd.Snapshot,
+				notifyc:  notifyc,
+			}
+
+			updateCommittedIndex(&ap, rh)
+
 			select {
-			case <-r.ticker.C:
-				r.tick()
-			case rd := <-r.Ready():
-				// LGX: ill keep these 'dirty' outputs for a while, until I fix linearizable reads :(
-				//fmt.Printf("raft: RECEIVED READY!\n")
-				//fmt.Println("raft: COMMITED:", len(rd.CommittedEntries))
-				//fmt.Println("raft: ENTRIES:", len(rd.Entries))
+			case r.applyc <- ap:
+			case <-r.stopped:
+				return
+			}
 
-				if rd.SoftState != nil {
-					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
-					if newLeader {
-						leaderChanges.Inc()
-					}
+			// the leader can write to its disk in parallel with replicating to the followers and them
+			// writing to their disks.
+			// For more details, check raft thesis 10.2.1
+			if islead {
+				// gofail: var raftBeforeLeaderSend struct{}
+				r.transport.Send(r.processMessages(rd.Messages))
+			}
 
-					if rd.SoftState.Lead == raft.None {
-						hasLeader.Set(0)
+			// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
+			// ensure that recovery after a snapshot restore is possible.
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				// gofail: var raftBeforeSaveSnap struct{}
+				if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
 					} else {
-						hasLeader.Set(1)
+						plog.Fatalf("failed to save Raft snapshot %v", err)
 					}
+				}
+				// gofail: var raftAfterSaveSnap struct{}
+			}
 
-					rh.updateLead(rd.SoftState.Lead)
-					islead = rd.RaftState == raft.StateLeader
-					if islead {
-						isLeader.Set(1)
+			// LGX: count timestamp before wal persistence
+			msr := false
+			if len(rd.Entries) > 0 && isMeasuringLatency {
+				var ts int64
+				ts, msr = mayMeasureLat()
+				if msr {
+					fmt.Fprintln(latBuff, ts)
+				}
+			}
+
+			// gofail: var raftBeforeSave struct{}
+			//
+			// LGX: stable storage save is done here within the raft scope, once an entry is considered
+			// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
+			if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
+				if r.lg != nil {
+					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+				} else {
+					plog.Fatalf("failed to save state and entries error: %v", err)
+				}
+			}
+
+			// LGX: count timestamp after wal persistence, only on StdWal config. The other storage implementations
+			// capture the persisted timestamp from within its Save() method.
+			if msr {
+				fmt.Fprintln(latBuff, time.Now().UnixNano())
+			}
+
+			if !raft.IsEmptyHardState(rd.HardState) {
+				proposalsCommitted.Set(float64(rd.HardState.Commit))
+			}
+			// gofail: var raftAfterSave struct{}
+
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				// Force WAL to fsync its hard state before Release() releases
+				// old data from the WAL. Otherwise could get an error like:
+				// panic: tocommit(107) is out of range [lastIndex(84)]. Was the raft log corrupted, truncated, or lost?
+				// See https://github.com/etcd-io/etcd/issues/10219 for more details.
+				if err := r.storage.Sync(); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to sync Raft snapshot", zap.Error(err))
 					} else {
-						isLeader.Set(0)
+						plog.Fatalf("failed to sync Raft snapshot %v", err)
 					}
-					rh.updateLeadership(newLeader)
-					r.td.Reset()
 				}
 
-				notifyc := make(chan struct{}, 1)
-				ap := apply{
-					entries:  rd.CommittedEntries,
-					snapshot: rd.Snapshot,
-					notifyc:  notifyc,
+				// etcdserver now claim the snapshot has been persisted onto the disk
+				notifyc <- struct{}{}
+
+				// gofail: var raftBeforeApplySnap struct{}
+				r.raftStorage.ApplySnapshot(rd.Snapshot)
+				if r.lg != nil {
+					r.lg.Info("applied incoming Raft snapshot", zap.Uint64("snapshot-index", rd.Snapshot.Metadata.Index))
+				} else {
+					plog.Infof("raft applied incoming snapshot at index %d", rd.Snapshot.Metadata.Index)
 				}
+				// gofail: var raftAfterApplySnap struct{}
 
-				hasReadRequest := len(rd.ReadStates) != 0
-				mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-
-				if isBatchEnabled && !mustIgnoreEntry {
-					//fmt.Println("====batch: analysing batch")
-					inc := len(rd.Entries)
-					if inc == 0 && hasReadRequest {
-						inc = 1
+				if err := r.storage.Release(rd.Snapshot); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to release Raft wal", zap.Error(err))
+					} else {
+						plog.Fatalf("failed to release Raft wal %v", err)
 					}
+				}
+				// gofail: var raftAfterWALRelease struct{}
+			}
 
-					count += inc
-					entriesBatch = append(entriesBatch, rd.Entries...)
-					appliesBatch = append(appliesBatch, ap)
-					if hasReadRequest {
-						readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
-					}
+			r.raftStorage.Append(rd.Entries)
 
-					if count < logBatchSize {
-						// TODO: for some reason read requests are still not advancing the protocol
-						// state when not applied, investigate later
+			if !islead {
+				// finish processing incoming messages before we signal raftdone chan
+				msgs := r.processMessages(rd.Messages)
 
-						//fmt.Println("====batch: advancing without logging...")
-						if islead {
-							// gofail: var raftBeforeLeaderSend struct{}
-							r.transport.Send(r.processMessages(rd.Messages))
-						}
+				// now unblocks 'applyAll' that waits on Raft log disk writes before triggering snapshots
+				notifyc <- struct{}{}
 
-						// notify apply routine
-						notifyc <- struct{}{}
-
-						r.raftStorage.Append(rd.Entries)
-						r.Advance()
+				// Candidate or follower needs to wait for all pending configuration
+				// changes to be applied before sending messages.
+				// Otherwise we might incorrectly count votes (e.g. votes from removed members).
+				// Also slow machine's follower raft-layer could proceed to become the leader
+				// on its own single-node cluster, before apply-layer applies the config change.
+				// We simply wait for ALL pending entries to be applied for now.
+				// We might improve this later on if it causes unnecessary long blocking issues.
+				waitApply := false
+				for _, ent := range rd.CommittedEntries {
+					if ent.Type == raftpb.EntryConfChange {
+						waitApply = true
 						break
 					}
+				}
+				if waitApply {
+					// blocks until 'applyAll' calls 'applyWait.Trigger'
+					// to be in sync with scheduled config-change job
+					// (assume notifyc has cap of 1)
+					select {
+					case notifyc <- struct{}{}:
+					case <-r.stopped:
+						return
+					}
+				}
 
-					//fmt.Println("====batch: BATCH FILLED!")
-					entries = &entriesBatch
-					reads = &readsBatch
-					applies = &appliesBatch
+				// gofail: var raftBeforeFollowerSend struct{}
+				r.transport.Send(msgs)
+			} else {
+				// leader already processed 'MsgSnap' and signaled
+				notifyc <- struct{}{}
+			}
 
+			r.Advance()
+		case <-r.stopped:
+			return
+		}
+	}
+}
+
+func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
+	internalTimeoutOnReads := 30 * time.Second
+
+	defer r.onStop()
+	islead := false
+
+	// LGX:
+	isBatchEnabled := logConfig == BatchWAL || logConfig == Beelog
+	entriesBatch := make([]raftpb.Entry, 0, logBatchSize)
+	appliesBatch := make([]apply, 0, logBatchSize)
+	readsBatch := make([]raft.ReadState, 0, logBatchSize)
+
+	ignoreIndex := uint64(4)
+	count := 0
+
+	var (
+		entries *[]raftpb.Entry
+		reads   *[]raft.ReadState
+		applies *[]apply
+	)
+
+	for {
+		select {
+		case <-r.ticker.C:
+			r.tick()
+		case rd := <-r.Ready():
+			// LGX: ill keep these 'dirty' outputs for a while, until I fix linearizable reads :(
+			//fmt.Printf("raft: RECEIVED READY!\n")
+			//fmt.Println("raft: COMMITED:", len(rd.CommittedEntries))
+			//fmt.Println("raft: ENTRIES:", len(rd.Entries))
+
+			if rd.SoftState != nil {
+				newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
+				if newLeader {
+					leaderChanges.Inc()
+				}
+
+				if rd.SoftState.Lead == raft.None {
+					hasLeader.Set(0)
 				} else {
-					// LGX: variables are on the same state as previously implemented by etcd
-					entries = &rd.Entries
-					reads = &[]raft.ReadState{}
-					applies = &[]apply{ap}
+					hasLeader.Set(1)
+				}
 
-					if hasReadRequest {
-						*reads = append(*reads, rd.ReadStates[len(rd.ReadStates)-1])
+				rh.updateLead(rd.SoftState.Lead)
+				islead = rd.RaftState == raft.StateLeader
+				if islead {
+					isLeader.Set(1)
+				} else {
+					isLeader.Set(0)
+				}
+				rh.updateLeadership(newLeader)
+				r.td.Reset()
+			}
+
+			notifyc := make(chan struct{}, 1)
+			ap := apply{
+				entries:  rd.CommittedEntries,
+				snapshot: rd.Snapshot,
+				notifyc:  notifyc,
+			}
+
+			hasReadRequest := len(rd.ReadStates) != 0
+			mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
+
+			if isBatchEnabled && !mustIgnoreEntry {
+				//fmt.Println("====batch: analysing batch")
+				inc := len(rd.Entries)
+				if inc == 0 && hasReadRequest {
+					inc = 1
+				}
+
+				count += inc
+				entriesBatch = append(entriesBatch, rd.Entries...)
+				appliesBatch = append(appliesBatch, ap)
+				if hasReadRequest {
+					readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
+				}
+
+				if count < logBatchSize {
+					// TODO: for some reason read requests are still not advancing the protocol
+					// state when not applied, investigate later
+
+					//fmt.Println("====batch: advancing without logging...")
+					if islead {
+						// gofail: var raftBeforeLeaderSend struct{}
+						r.transport.Send(r.processMessages(rd.Messages))
 					}
 
-					// LGX:
-					// NOTE: serving linearizable read requests
+					// notify apply routine
+					notifyc <- struct{}{}
+
+					r.raftStorage.Append(rd.Entries)
+					r.Advance()
+					break
+				}
+
+				//fmt.Println("====batch: BATCH FILLED!")
+				entries = &entriesBatch
+				reads = &readsBatch
+				applies = &appliesBatch
+
+			} else {
+				// LGX: variables are on the same state as previously implemented by etcd
+				entries = &rd.Entries
+				reads = &[]raft.ReadState{}
+				applies = &[]apply{ap}
+
+				if hasReadRequest {
+					*reads = append(*reads, rd.ReadStates[len(rd.ReadStates)-1])
+				}
+
+				// LGX:
+				// NOTE: serving linearizable read requests
+				for _, read := range *reads {
+					select {
+					case r.readStateC <- read:
+					case <-time.After(internalTimeoutOnReads):
+						if r.lg != nil {
+							r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
+						} else {
+							plog.Warningf("timed out sending read state")
+						}
+					case <-r.stopped:
+						return
+					}
+				}
+
+				// LGX: here it basically applies the previously commited write entries while continues to
+				// persist the hard state on this same routine (as stated on the comment below)
+				for _, apl := range *applies {
+					updateCommittedIndex(&apl, rh)
+					select {
+					case r.applyc <- apl:
+					case <-r.stopped:
+						return
+					}
+				}
+			}
+
+			// the leader can write to its disk in parallel with replicating to the followers and them
+			// writing to their disks.
+			// For more details, check raft thesis 10.2.1
+			if islead {
+				// gofail: var raftBeforeLeaderSend struct{}
+				r.transport.Send(r.processMessages(rd.Messages))
+			}
+
+			// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
+			// ensure that recovery after a snapshot restore is possible.
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				// gofail: var raftBeforeSaveSnap struct{}
+				if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
+					} else {
+						plog.Fatalf("failed to save Raft snapshot %v", err)
+					}
+				}
+				// gofail: var raftAfterSaveSnap struct{}
+			}
+
+			// LGX: count timestamp before wal persistence
+			msr := false
+			if isMeasuringLatency && logConfig != Beelog && len(rd.Entries) > 0 {
+				var ts int64
+				ts, msr = mayMeasureLat()
+				if msr {
+					fmt.Fprintln(latBuff, ts)
+				}
+			}
+
+			// gofail: var raftBeforeSave struct{}
+			//
+			// LGX: stable storage save is done here within the raft scope, once an entry is considered
+			// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
+			//
+			// NOTE: If the ETCD_BEELOG_ENABLE env is set, the storage interface is initialized with beemport,
+			// so basically the storage.Save() here intrinsically calls beemport.Log() through a wrapper
+			if err := r.storage.Save(rd.HardState, *entries); err != nil {
+				if r.lg != nil {
+					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+				} else {
+					plog.Fatalf("failed to save state and entries error: %v", err)
+				}
+			}
+
+			// LGX: count timestamp after wal persistence, only on StdWal config. The other storage implementations
+			// capture the persisted timestamp from within its Save() method.
+			if logConfig == StdWAL && msr {
+				fmt.Fprintln(latBuff, time.Now().UnixNano())
+			}
+
+			if !raft.IsEmptyHardState(rd.HardState) {
+				proposalsCommitted.Set(float64(rd.HardState.Commit))
+			}
+			// gofail: var raftAfterSave struct{}
+
+			// LGX: wont ever be executing during our experiments
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				// Force WAL to fsync its hard state before Release() releases
+				// old data from the WAL. Otherwise could get an error like:
+				// panic: tocommit(107) is out of range [lastIndex(84)]. Was the raft log corrupted, truncated, or lost?
+				// See https://github.com/etcd-io/etcd/issues/10219 for more details.
+				if err := r.storage.Sync(); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to sync Raft snapshot", zap.Error(err))
+					} else {
+						plog.Fatalf("failed to sync Raft snapshot %v", err)
+					}
+				}
+
+				// etcdserver now claim the snapshot has been persisted onto the disk
+				notifyc <- struct{}{}
+
+				// gofail: var raftBeforeApplySnap struct{}
+				r.raftStorage.ApplySnapshot(rd.Snapshot)
+				if r.lg != nil {
+					r.lg.Info("applied incoming Raft snapshot", zap.Uint64("snapshot-index", rd.Snapshot.Metadata.Index))
+				} else {
+					plog.Infof("raft applied incoming snapshot at index %d", rd.Snapshot.Metadata.Index)
+				}
+				// gofail: var raftAfterApplySnap struct{}
+
+				if err := r.storage.Release(rd.Snapshot); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to release Raft wal", zap.Error(err))
+					} else {
+						plog.Fatalf("failed to release Raft wal %v", err)
+					}
+				}
+				// gofail: var raftAfterWALRelease struct{}
+			}
+
+			r.raftStorage.Append(rd.Entries)
+
+			if !islead {
+				// finish processing incoming messages before we signal raftdone chan
+				msgs := r.processMessages(rd.Messages)
+
+				// now unblocks 'applyAll' that waits on Raft log disk writes before triggering snapshots
+				notifyc <- struct{}{}
+
+				// Candidate or follower needs to wait for all pending configuration
+				// changes to be applied before sending messages.
+				// Otherwise we might incorrectly count votes (e.g. votes from removed members).
+				// Also slow machine's follower raft-layer could proceed to become the leader
+				// on its own single-node cluster, before apply-layer applies the config change.
+				// We simply wait for ALL pending entries to be applied for now.
+				// We might improve this later on if it causes unnecessary long blocking issues.
+				waitApply := false
+				for _, ent := range rd.CommittedEntries {
+					if ent.Type == raftpb.EntryConfChange {
+						waitApply = true
+						break
+					}
+				}
+				if waitApply {
+					// blocks until 'applyAll' calls 'applyWait.Trigger'
+					// to be in sync with scheduled config-change job
+					// (assume notifyc has cap of 1)
+					select {
+					case notifyc <- struct{}{}:
+					case <-r.stopped:
+						return
+					}
+				}
+
+				// gofail: var raftBeforeFollowerSend struct{}
+				r.transport.Send(msgs)
+			} else {
+				// leader already processed 'MsgSnap' and signaled
+				notifyc <- struct{}{}
+			}
+
+			// LGX: on batch config, applies must be sent AFTER commands are successfully
+			// written to stable storage.
+			if isBatchEnabled {
+				if !mustIgnoreEntry {
 					for _, read := range *reads {
 						select {
 						case r.readStateC <- read:
@@ -287,8 +666,6 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 						}
 					}
 
-					// LGX: here it basically applies the previously commited write entries while continues to
-					// persist the hard state on this same routine (as stated on the comment below)
 					for _, apl := range *applies {
 						updateCommittedIndex(&apl, rh)
 						select {
@@ -299,182 +676,22 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					}
 				}
 
-				// the leader can write to its disk in parallel with replicating to the followers and them
-				// writing to their disks.
-				// For more details, check raft thesis 10.2.1
-				if islead {
-					// gofail: var raftBeforeLeaderSend struct{}
-					r.transport.Send(r.processMessages(rd.Messages))
-				}
-
-				// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
-				// ensure that recovery after a snapshot restore is possible.
-				if !raft.IsEmptySnap(rd.Snapshot) {
-					// gofail: var raftBeforeSaveSnap struct{}
-					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
-						if r.lg != nil {
-							r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
-						} else {
-							plog.Fatalf("failed to save Raft snapshot %v", err)
-						}
-					}
-					// gofail: var raftAfterSaveSnap struct{}
-				}
-
-				// LGX: count timestamp before wal persistence
-				msr := false
-				if isMeasuringLatency && logConfig != Beelog && len(rd.Entries) > 0 {
-					var ts int64
-					ts, msr = mayMeasureLat()
-					if msr {
-						fmt.Fprintln(latBuff, ts)
-					}
-				}
-
-				// gofail: var raftBeforeSave struct{}
-				//
-				// LGX: stable storage save is done here within the raft scope, once an entry is considered
-				// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
-				//
-				// NOTE: If the ETCD_BEELOG_ENABLE env is set, the storage interface is initialized with beemport,
-				// so basically the storage.Save() here intrinsically calls beemport.Log() through a wrapper
-				if err := r.storage.Save(rd.HardState, *entries); err != nil {
-					if r.lg != nil {
-						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
-					} else {
-						plog.Fatalf("failed to save state and entries error: %v", err)
-					}
-				}
-
-				// LGX: count timestamp after wal persistence, only on StdWal config. The other storage implementations
-				// capture the persisted timestamp from within its Save() method.
-				if logConfig == StdWAL && msr {
-					fmt.Fprintln(latBuff, time.Now().UnixNano())
-				}
-
-				if !raft.IsEmptyHardState(rd.HardState) {
-					proposalsCommitted.Set(float64(rd.HardState.Commit))
-				}
-				// gofail: var raftAfterSave struct{}
-
-				// LGX: wont ever be executing during our experiments
-				if !raft.IsEmptySnap(rd.Snapshot) {
-					// Force WAL to fsync its hard state before Release() releases
-					// old data from the WAL. Otherwise could get an error like:
-					// panic: tocommit(107) is out of range [lastIndex(84)]. Was the raft log corrupted, truncated, or lost?
-					// See https://github.com/etcd-io/etcd/issues/10219 for more details.
-					if err := r.storage.Sync(); err != nil {
-						if r.lg != nil {
-							r.lg.Fatal("failed to sync Raft snapshot", zap.Error(err))
-						} else {
-							plog.Fatalf("failed to sync Raft snapshot %v", err)
-						}
-					}
-
-					// etcdserver now claim the snapshot has been persisted onto the disk
-					notifyc <- struct{}{}
-
-					// gofail: var raftBeforeApplySnap struct{}
-					r.raftStorage.ApplySnapshot(rd.Snapshot)
-					if r.lg != nil {
-						r.lg.Info("applied incoming Raft snapshot", zap.Uint64("snapshot-index", rd.Snapshot.Metadata.Index))
-					} else {
-						plog.Infof("raft applied incoming snapshot at index %d", rd.Snapshot.Metadata.Index)
-					}
-					// gofail: var raftAfterApplySnap struct{}
-
-					if err := r.storage.Release(rd.Snapshot); err != nil {
-						if r.lg != nil {
-							r.lg.Fatal("failed to release Raft wal", zap.Error(err))
-						} else {
-							plog.Fatalf("failed to release Raft wal %v", err)
-						}
-					}
-					// gofail: var raftAfterWALRelease struct{}
-				}
-
-				r.raftStorage.Append(rd.Entries)
-
-				if !islead {
-					// finish processing incoming messages before we signal raftdone chan
-					msgs := r.processMessages(rd.Messages)
-
-					// now unblocks 'applyAll' that waits on Raft log disk writes before triggering snapshots
-					notifyc <- struct{}{}
-
-					// Candidate or follower needs to wait for all pending configuration
-					// changes to be applied before sending messages.
-					// Otherwise we might incorrectly count votes (e.g. votes from removed members).
-					// Also slow machine's follower raft-layer could proceed to become the leader
-					// on its own single-node cluster, before apply-layer applies the config change.
-					// We simply wait for ALL pending entries to be applied for now.
-					// We might improve this later on if it causes unnecessary long blocking issues.
-					waitApply := false
-					for _, ent := range rd.CommittedEntries {
-						if ent.Type == raftpb.EntryConfChange {
-							waitApply = true
-							break
-						}
-					}
-					if waitApply {
-						// blocks until 'applyAll' calls 'applyWait.Trigger'
-						// to be in sync with scheduled config-change job
-						// (assume notifyc has cap of 1)
-						select {
-						case notifyc <- struct{}{}:
-						case <-r.stopped:
-							return
-						}
-					}
-
-					// gofail: var raftBeforeFollowerSend struct{}
-					r.transport.Send(msgs)
-				} else {
-					// leader already processed 'MsgSnap' and signaled
-					notifyc <- struct{}{}
-				}
-
-				// LGX: on batch config, applies must be sent AFTER commands are successfully
-				// written to stable storage.
-				if isBatchEnabled {
-					if !mustIgnoreEntry {
-						for _, read := range *reads {
-							select {
-							case r.readStateC <- read:
-							case <-time.After(internalTimeoutOnReads):
-								if r.lg != nil {
-									r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
-								} else {
-									plog.Warningf("timed out sending read state")
-								}
-							case <-r.stopped:
-								return
-							}
-						}
-
-						for _, apl := range *applies {
-							updateCommittedIndex(&apl, rh)
-							select {
-							case r.applyc <- apl:
-							case <-r.stopped:
-								return
-							}
-						}
-					}
-
-					// reset batch and keep underlying array
-					count = 0
-					entriesBatch = entriesBatch[:0]
-					appliesBatch = appliesBatch[:0]
-					readsBatch = readsBatch[:0]
-				}
-				r.Advance()
-
-			case <-r.stopped:
-				return
+				// reset batch and keep underlying array
+				count = 0
+				entriesBatch = entriesBatch[:0]
+				appliesBatch = appliesBatch[:0]
+				readsBatch = readsBatch[:0]
 			}
+			r.Advance()
+
+		case <-r.stopped:
+			return
 		}
-	}()
+	}
+}
+
+func (r *raftNode) startBeelog(rh *raftReadyHandler) {
+	// TODO:
 }
 
 func updateCommittedIndex(ap *apply, rh *raftReadyHandler) {
