@@ -3,10 +3,12 @@ package etcdserver
 import (
 	"encoding/binary"
 	"math/rand"
+	"reflect"
 	"testing"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
 	"go.etcd.io/etcd/pkg/pbutil"
+	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 )
 
@@ -15,7 +17,7 @@ const (
 	diffKeys = 10000
 )
 
-func TestBeelog(t *testing.T) {
+func TestBeelogAPI(t *testing.T) {
 	batchSize := 10
 	loggedEntries := make([]raftpb.Entry, 0)
 	bw := NewBeelogWr()
@@ -39,8 +41,8 @@ func TestBeelog(t *testing.T) {
 	reducedEntries := make(chan []raftpb.Entry)
 
 	go func() {
-		lEnts := bw.Entries(oldCur)
-		reducedEntries <- lEnts
+		re := bw.Entries(oldCur)
+		reducedEntries <- re
 	}()
 
 	// log invocations on the new cursor should not block execution from
@@ -52,7 +54,38 @@ func TestBeelog(t *testing.T) {
 
 	rEnts := <-reducedEntries
 	if !entriesWereReducedCorrectly(loggedEntries, rEnts) {
-		t.Fatal()
+		t.Fatal("logs were not reduced correctly, states are not equivalent")
+	}
+}
+
+func TestBeelogExecutionOnRaft(t *testing.T) {
+	batchSize := 10
+	bw := NewBeelogWr()
+
+	// generate 10 * batchsize entries on raft channel
+	raftReady := make(chan raft.Ready)
+	go generateRaftReady(raftReady, 10*batchSize)
+
+	count := 0
+	for rd := range raftReady {
+		count += len(rd.Entries)
+		if count < batchSize {
+			if err := bw.Log(rd.Entries, false); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+
+		if err := bw.Log(rd.Entries, true); err != nil {
+			t.Fatal(err)
+		}
+
+		// just calling entries for now, testing possible data race
+		go func(cur int) {
+			bw.Entries(cur)
+		}(bw.Switch())
+
+		// TODO: delay repply on commited entries
 	}
 }
 
@@ -67,10 +100,41 @@ func getRandEntry(index int) raftpb.Entry {
 }
 
 func entriesWereReducedCorrectly(logged, reduced []raftpb.Entry) bool {
-	if len(logged) < len(reduced) {
+	if len(reduced) > len(logged) {
 		return false
 	}
 
-	// TODO: compare keys from within both sets
-	return true
+	loggedState := make(StateTable)
+	for _, ent := range logged {
+		key, err := getKeyFromRaftEntry(ent)
+		if err != nil {
+			return false
+		}
+		loggedState[key] = ent
+	}
+
+	reducedState := make(StateTable)
+	for _, ent := range reduced {
+		key, err := getKeyFromRaftEntry(ent)
+		if err != nil {
+			return false
+		}
+		reducedState[key] = ent
+	}
+	return reflect.DeepEqual(reducedState, loggedState)
+}
+
+func generateRaftReady(rds chan<- raft.Ready, numRds int) {
+	// starts at 2 so that the first index is 1
+	for i := 2; i < numRds+2; i++ {
+		rds <- raft.Ready{
+			CommittedEntries: []raftpb.Entry{
+				getRandEntry(i - 1),
+			},
+			Entries: []raftpb.Entry{
+				getRandEntry(i),
+			},
+		}
+	}
+	close(rds)
 }
