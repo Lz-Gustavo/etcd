@@ -654,116 +654,118 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				r.raftStorage.Append(rd.Entries)
 				r.processRaftEntriesAfterSave(islead, rd, notifyc)
 
-			} else {
-				inc := len(rd.Entries)
-				if inc == 0 && hasReadRequest {
-					inc = 1
-				}
+				r.Advance()
+				break
+			}
 
-				count += inc
-				appliesBatch = append(appliesBatch, ap)
-				if hasReadRequest {
-					readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
-				}
+			inc := len(rd.Entries)
+			if inc == 0 && hasReadRequest {
+				inc = 1
+			}
 
-				if count < logBatchSize {
-					if err := bw.Log(rd.Entries, false); err != nil {
-						log.Fatalln("failed on beelog.Log, err:", err)
-					}
+			count += inc
+			appliesBatch = append(appliesBatch, ap)
+			if hasReadRequest {
+				readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
+			}
 
-					// TODO: for some reason read requests are still not advancing the protocol
-					// state when not applied, investigate later
-
-					if islead {
-						// gofail: var raftBeforeLeaderSend struct{}
-						r.transport.Send(r.processMessages(rd.Messages))
-					}
-
-					// notify apply routine
-					notifyc <- struct{}{}
-
-					r.raftStorage.Append(rd.Entries)
-					r.Advance()
-					break
-				}
-
-				// batch is now filled
-				if err := bw.Log(rd.Entries, true); err != nil {
+			if count < logBatchSize {
+				if err := bw.Log(rd.Entries, false); err != nil {
 					log.Fatalln("failed on beelog.Log, err:", err)
 				}
 
-				// the leader can write to its disk in parallel with replicating to the followers and them
-				// writing to their disks.
-				// For more details, check raft thesis 10.2.1
+				// TODO: for some reason read requests are still not advancing the protocol
+				// state when not applied, investigate later
+
 				if islead {
 					// gofail: var raftBeforeLeaderSend struct{}
 					r.transport.Send(r.processMessages(rd.Messages))
 				}
 
-				// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
-				// ensure that recovery after a snapshot restore is possible.
-				if !raft.IsEmptySnap(rd.Snapshot) {
-					// gofail: var raftBeforeSaveSnap struct{}
-					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
-						if r.lg != nil {
-							r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
-						} else {
-							plog.Fatalf("failed to save Raft snapshot %v", err)
-						}
+				// notify apply routine
+				notifyc <- struct{}{}
+
+				r.raftStorage.Append(rd.Entries)
+				r.Advance()
+				break
+			}
+
+			// batch is now filled
+			if err := bw.Log(rd.Entries, true); err != nil {
+				log.Fatalln("failed on beelog.Log, err:", err)
+			}
+
+			// the leader can write to its disk in parallel with replicating to the followers and them
+			// writing to their disks.
+			// For more details, check raft thesis 10.2.1
+			if islead {
+				// gofail: var raftBeforeLeaderSend struct{}
+				r.transport.Send(r.processMessages(rd.Messages))
+			}
+
+			// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
+			// ensure that recovery after a snapshot restore is possible.
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				// gofail: var raftBeforeSaveSnap struct{}
+				if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
+					} else {
+						plog.Fatalf("failed to save Raft snapshot %v", err)
 					}
-					// gofail: var raftAfterSaveSnap struct{}
+				}
+				// gofail: var raftAfterSaveSnap struct{}
+			}
+
+			// LGX: entries are appended BEFORE wal persistence on the beelog approach in order to
+			// receive new entries on the next <-rd.Ready iteration while concurrently flushing to
+			// stable storage. Entries are not applied, nor repplied to clients, until persistence.
+			r.raftStorage.Append(rd.Entries)
+
+			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
+			cpyReads := append(make([]raft.ReadState, 0, len(readsBatch)), readsBatch...)
+
+			go func(cur int, rd raft.Ready, applies []apply, reads []raft.ReadState, lead bool, ch chan struct{}, mu *sync.Mutex) {
+				mu.Lock()
+				defer mu.Unlock()
+
+				// gofail: var raftBeforeSave struct{}
+				//
+				// LGX: stable storage save is done here within the raft scope, once an entry is considered
+				// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
+				if err := r.storage.Save(rd.HardState, bw.Entries(cur)); err != nil {
+					if r.lg != nil {
+						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+					} else {
+						plog.Fatalf("failed to save state and entries error: %v", err)
+					}
 				}
 
-				// LGX: entries are appended BEFORE wal persistence on the beelog approach in order to
-				// receive new entries on the next <-rd.Ready iteration while concurrently flushing to
-				// stable storage. Entries are not applied, nor repplied to clients, until persistence.
-				r.raftStorage.Append(rd.Entries)
+				r.processRaftEntriesAfterSave(lead, rd, ch)
 
-				cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
-				cpyReads := append(make([]raft.ReadState, 0, len(readsBatch)), readsBatch...)
-
-				go func(cur int, rd raft.Ready, applies []apply, reads []raft.ReadState, lead bool, ch chan struct{}, mu *sync.Mutex) {
-					mu.Lock()
-					defer mu.Unlock()
-
-					// gofail: var raftBeforeSave struct{}
-					//
-					// LGX: stable storage save is done here within the raft scope, once an entry is considered
-					// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
-					if err := r.storage.Save(rd.HardState, bw.Entries(cur)); err != nil {
+				for _, read := range reads {
+					select {
+					case r.readStateC <- read:
+					case <-time.After(internalTimeoutOnReads):
 						if r.lg != nil {
-							r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+							r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
 						} else {
-							plog.Fatalf("failed to save state and entries error: %v", err)
+							plog.Warningf("timed out sending read state")
 						}
+					case <-r.stopped:
+						return
 					}
+				}
 
-					r.processRaftEntriesAfterSave(lead, rd, ch)
-
-					for _, read := range reads {
-						select {
-						case r.readStateC <- read:
-						case <-time.After(internalTimeoutOnReads):
-							if r.lg != nil {
-								r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
-							} else {
-								plog.Warningf("timed out sending read state")
-							}
-						case <-r.stopped:
-							return
-						}
+				for _, apl := range applies {
+					updateCommittedIndex(&apl, rh)
+					select {
+					case r.applyc <- apl:
+					case <-r.stopped:
+						return
 					}
-
-					for _, apl := range applies {
-						updateCommittedIndex(&apl, rh)
-						select {
-						case r.applyc <- apl:
-						case <-r.stopped:
-							return
-						}
-					}
-				}(bw.Switch(), rd, cpyApplies, cpyReads, islead, notifyc, mu)
-			}
+				}
+			}(bw.Switch(), rd, cpyApplies, cpyReads, islead, notifyc, mu)
 
 			// reset batch and keep underlying arrays
 			count = 0
