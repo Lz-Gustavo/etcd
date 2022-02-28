@@ -565,7 +565,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		nodeCfg.storage = NewStorage(w, ss)
 
 	case Beelog:
-		nodeCfg.storage = NewBeelogStorage()
+		//nodeCfg.storage = NewBeelogStorage()
+		nodeCfg.storage = NewStorage(w, ss)
 
 	default:
 		log.Fatalln(ErrInvalidLogConfig.Error())
