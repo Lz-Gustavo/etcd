@@ -116,6 +116,17 @@ type raftNodeConfig struct {
 	transport rafthttp.Transporter
 }
 
+// LGX: beelogSaveRequest represents an executed raft state, storing all the necessary
+// information for a concurrent routine can assync. persist that state on stable storage.
+type beelogSaveRequest struct {
+	cur     int
+	rd      raft.Ready
+	islead  bool
+	applies []apply
+	reads   []raft.ReadState
+	notifyc chan struct{}
+}
+
 func newRaftNode(cfg raftNodeConfig) *raftNode {
 	var lg raft.Logger
 	if cfg.lg != nil {
@@ -554,7 +565,6 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 // LGX TODO: discard intermediate applies for the same key, while concurrently
 // processing new raft.Ready's
 func (r *raftNode) startBeelog(rh *raftReadyHandler) {
-	internalTimeoutOnReads := 30 * time.Second
 	ignoreIndex := uint64(4)
 
 	defer r.onStop()
@@ -565,7 +575,12 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	// entries through bw.Entries. The idea is that the 'n'th routine can be concurrently
 	// executed against the <-r.Ready iteration of next entries, but MUST BE executed before
 	// n + 1 routine.
-	mu := &sync.Mutex{}
+	//
+	// utilizing a channel instead to provided cheaper synchronization and preserve FIFO
+	saveCh := make(chan beelogSaveRequest)
+	defer close(saveCh)
+
+	go r.saveEntriesAndApply(bw, rh, saveCh)
 
 	appliesBatch := make([]apply, 0, logBatchSize)
 	readsBatch := make([]raft.ReadState, 0, logBatchSize)
@@ -725,47 +740,17 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
 			cpyReads := append(make([]raft.ReadState, 0, len(readsBatch)), readsBatch...)
 
-			go func(cur int, rd raft.Ready, applies []apply, reads []raft.ReadState, lead bool, ch chan struct{}, mu *sync.Mutex) {
-				mu.Lock()
-				defer mu.Unlock()
+			req := beelogSaveRequest{
+				cur:     bw.Switch(),
+				rd:      rd,
+				islead:  islead,
+				applies: cpyApplies,
+				reads:   cpyReads,
+				notifyc: notifyc,
+			}
 
-				// gofail: var raftBeforeSave struct{}
-				//
-				// LGX: stable storage save is done here within the raft scope, once an entry is considered
-				// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
-				if err := r.storage.Save(rd.HardState, bw.Entries(cur)); err != nil {
-					if r.lg != nil {
-						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
-					} else {
-						plog.Fatalf("failed to save state and entries error: %v", err)
-					}
-				}
-
-				r.processRaftEntriesAfterSave(lead, rd, ch)
-
-				for _, read := range reads {
-					select {
-					case r.readStateC <- read:
-					case <-time.After(internalTimeoutOnReads):
-						if r.lg != nil {
-							r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
-						} else {
-							plog.Warningf("timed out sending read state")
-						}
-					case <-r.stopped:
-						return
-					}
-				}
-
-				for _, apl := range applies {
-					updateCommittedIndex(&apl, rh)
-					select {
-					case r.applyc <- apl:
-					case <-r.stopped:
-						return
-					}
-				}
-			}(bw.Switch(), rd, cpyApplies, cpyReads, islead, notifyc, mu)
+			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
+			saveCh <- req
 
 			// reset batch and keep underlying arrays
 			count = 0
@@ -779,7 +764,52 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	}
 }
 
-// LGX: utilized only on startBatchWAL and startBeelog ...
+// LGX: saveEntriesAndApply ...
+func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, reqs <-chan beelogSaveRequest) {
+	internalTimeoutOnReads := 30 * time.Second
+	for req := range reqs {
+		// gofail: var raftBeforeSave struct{}
+		//
+		// LGX: stable storage save is done here within the raft scope, once an entry is considered
+		// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
+		if err := r.storage.Save(req.rd.HardState, bw.Entries(req.cur)); err != nil {
+			if r.lg != nil {
+				r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+			} else {
+				plog.Fatalf("failed to save state and entries error: %v", err)
+			}
+		}
+
+		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
+
+		for _, read := range req.reads {
+			select {
+			case r.readStateC <- read:
+			case <-time.After(internalTimeoutOnReads):
+				if r.lg != nil {
+					r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
+				} else {
+					plog.Warningf("timed out sending read state")
+				}
+			case <-r.stopped:
+				return
+			}
+		}
+
+		for _, apl := range req.applies {
+			updateCommittedIndex(&apl, rh)
+			select {
+			case r.applyc <- apl:
+			case <-r.stopped:
+				return
+			}
+		}
+	}
+}
+
+// LGX: utilized only on startBatchWAL and startBeelog, processRaftEntriesAfterSave executes
+// all procedures previously implemented by the etcd standard raft implementation after log
+// persistence.
 func (r *raftNode) processRaftEntriesAfterSave(islead bool, rd raft.Ready, notifyc chan struct{}) {
 	if !raft.IsEmptyHardState(rd.HardState) {
 		proposalsCommitted.Set(float64(rd.HardState.Commit))
