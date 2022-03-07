@@ -17,9 +17,7 @@ type StateTable map[int64]raftpb.Entry
 type BeelogWr struct {
 	state [numTables]StateTable
 	mu    [numTables]*sync.Mutex
-
 	cur   int
-	curMu *sync.RWMutex
 }
 
 func NewBeelogWr() *BeelogWr {
@@ -34,18 +32,17 @@ func NewBeelogWr() *BeelogWr {
 	return &BeelogWr{
 		state: s,
 		mu:    m,
-		curMu: &sync.RWMutex{},
 	}
 }
 
 // A call with 'filled' resulting in a nil error, inccurs that bw.Entries()
 // will be called...
 // TODO: describe API and how to prevent data race...
+//
+// IMPORTANT: Log should never be called concurrently
 func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
-	bw.curMu.RLock()
 	cur := bw.cur
 	bw.mu[cur].Lock()
-	bw.curMu.RUnlock()
 
 	for _, ent := range ents {
 		k, err := getKeyFromRaftEntry(ent)
@@ -63,10 +60,8 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 }
 
 func (bw *BeelogWr) Switch() int {
-	bw.curMu.Lock()
 	cur := bw.cur
 	bw.advance()
-	bw.curMu.Unlock()
 	return cur
 }
 

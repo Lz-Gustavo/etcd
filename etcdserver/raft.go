@@ -123,7 +123,6 @@ type beelogSaveRequest struct {
 	rd      raft.Ready
 	islead  bool
 	applies []apply
-	reads   []raft.ReadState
 	notifyc chan struct{}
 }
 
@@ -387,7 +386,7 @@ func (r *raftNode) startStdWAL(rh *raftReadyHandler) {
 
 // TODO: describe and add ad-hoc latency measurement
 func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
-	internalTimeoutOnReads := 30 * time.Second
+	internalTimeoutOnReads := 5 * time.Second
 	ignoreIndex := uint64(4)
 
 	defer r.onStop()
@@ -395,7 +394,6 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 
 	entriesBatch := make([]raftpb.Entry, 0, logBatchSize)
 	appliesBatch := make([]apply, 0, logBatchSize)
-	readsBatch := make([]raft.ReadState, 0, logBatchSize)
 	count := 0
 
 	var entriesPtr *[]raftpb.Entry
@@ -428,6 +426,21 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				r.td.Reset()
 			}
 
+			// LGX: serve linearizable read requests
+			if len(rd.ReadStates) != 0 {
+				select {
+				case r.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
+				case <-time.After(internalTimeoutOnReads):
+					if r.lg != nil {
+						r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
+					} else {
+						plog.Warningf("timed out sending read state")
+					}
+				case <-r.stopped:
+					return
+				}
+			}
+
 			notifyc := make(chan struct{}, 1)
 			ap := apply{
 				entries:  rd.CommittedEntries,
@@ -435,15 +448,9 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			hasReadRequest := len(rd.ReadStates) != 0
 			mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-
 			if mustIgnoreEntry {
 				entriesPtr = &rd.Entries
-
-				if hasReadRequest {
-					log.Fatalln("read entries should not be present within the ignore index interval")
-				}
 
 				updateCommittedIndex(&ap, rh)
 				select {
@@ -453,17 +460,9 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				}
 
 			} else {
-				inc := len(rd.Entries)
-				if inc == 0 && hasReadRequest {
-					inc = 1
-				}
-
-				count += inc
+				count += len(rd.Entries)
 				entriesBatch = append(entriesBatch, rd.Entries...)
 				appliesBatch = append(appliesBatch, ap)
-				if hasReadRequest {
-					readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
-				}
 
 				if count < logBatchSize {
 					// TODO: for some reason read requests are still not advancing the protocol
@@ -525,20 +524,6 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 			// LGX: on batch config, applies must be sent AFTER commands are successfully
 			// written to stable storage.
 			if !mustIgnoreEntry {
-				for _, read := range readsBatch {
-					select {
-					case r.readStateC <- read:
-					case <-time.After(internalTimeoutOnReads):
-						if r.lg != nil {
-							r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
-						} else {
-							plog.Warningf("timed out sending read state")
-						}
-					case <-r.stopped:
-						return
-					}
-				}
-
 				for _, apl := range appliesBatch {
 					updateCommittedIndex(&apl, rh)
 					select {
@@ -553,7 +538,6 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 			count = 0
 			entriesBatch = entriesBatch[:0]
 			appliesBatch = appliesBatch[:0]
-			readsBatch = readsBatch[:0]
 			r.Advance()
 
 		case <-r.stopped:
@@ -565,6 +549,7 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 // LGX TODO: discard intermediate applies for the same key, while concurrently
 // processing new raft.Ready's
 func (r *raftNode) startBeelog(rh *raftReadyHandler) {
+	internalTimeoutOnReads := 5 * time.Second
 	ignoreIndex := uint64(4)
 
 	defer r.onStop()
@@ -583,7 +568,6 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	go r.saveEntriesAndApply(bw, rh, saveCh)
 
 	appliesBatch := make([]apply, 0, logBatchSize)
-	readsBatch := make([]raft.ReadState, 0, logBatchSize)
 	count := 0
 
 	for {
@@ -614,6 +598,21 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				r.td.Reset()
 			}
 
+			// LGX: serve linearizable read requests
+			if len(rd.ReadStates) != 0 {
+				select {
+				case r.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
+				case <-time.After(internalTimeoutOnReads):
+					if r.lg != nil {
+						r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
+					} else {
+						plog.Warningf("timed out sending read state")
+					}
+				case <-r.stopped:
+					return
+				}
+			}
+
 			notifyc := make(chan struct{}, 1)
 			ap := apply{
 				entries:  rd.CommittedEntries,
@@ -621,14 +620,8 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			hasReadRequest := len(rd.ReadStates) != 0
 			mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-
 			if mustIgnoreEntry {
-				if hasReadRequest {
-					log.Fatalln("read entries should not be present within the ignore index interval")
-				}
-
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:
@@ -673,16 +666,8 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				break
 			}
 
-			inc := len(rd.Entries)
-			if inc == 0 && hasReadRequest {
-				inc = 1
-			}
-
-			count += inc
+			count += len(rd.Entries)
 			appliesBatch = append(appliesBatch, ap)
-			if hasReadRequest {
-				readsBatch = append(readsBatch, rd.ReadStates[len(rd.ReadStates)-1])
-			}
 
 			if count < logBatchSize {
 				if err := bw.Log(rd.Entries, false); err != nil {
@@ -738,14 +723,11 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			r.raftStorage.Append(rd.Entries)
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
-			cpyReads := append(make([]raft.ReadState, 0, len(readsBatch)), readsBatch...)
-
 			req := beelogSaveRequest{
 				cur:     bw.Switch(),
 				rd:      rd,
 				islead:  islead,
 				applies: cpyApplies,
-				reads:   cpyReads,
 				notifyc: notifyc,
 			}
 
@@ -755,7 +737,6 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			// reset batch and keep underlying arrays
 			count = 0
 			appliesBatch = appliesBatch[:0]
-			readsBatch = readsBatch[:0]
 			r.Advance()
 
 		case <-r.stopped:
@@ -766,7 +747,6 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 // LGX: saveEntriesAndApply ...
 func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, reqs <-chan beelogSaveRequest) {
-	internalTimeoutOnReads := 30 * time.Second
 	for req := range reqs {
 		// gofail: var raftBeforeSave struct{}
 		//
@@ -781,20 +761,6 @@ func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, reqs 
 		}
 
 		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
-
-		for _, read := range req.reads {
-			select {
-			case r.readStateC <- read:
-			case <-time.After(internalTimeoutOnReads):
-				if r.lg != nil {
-					r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeoutOnReads))
-				} else {
-					plog.Warningf("timed out sending read state")
-				}
-			case <-r.stopped:
-				return
-			}
-		}
 
 		for _, apl := range req.applies {
 			updateCommittedIndex(&apl, rh)
