@@ -31,4 +31,8 @@ message Request {
 message Metadata {
 	optional uint64 NodeID    = 1 [(gogoproto.nullable) = false];
 	optional uint64 ClusterID = 2 [(gogoproto.nullable) = false];
+
+	// LGX: evaluate possibility to add new attributes on the WAL Metadata
+	//optional uint64 FirstIndex = 3 [(gogoproto.nullable) = false];
+	//optional uint64 LastIndex  = 4 [(gogoproto.nullable) = false];
 }

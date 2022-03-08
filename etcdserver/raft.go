@@ -19,6 +19,7 @@ import (
 	"expvar"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -55,7 +56,21 @@ var (
 	// so only register a func that calls raftStatus
 	// and change raftStatus as we need.
 	raftStatus func() raft.Status
+
+	// LGX:
+	beelogWALDir string
 )
+
+func parseBeelogConfigFromEnv() {
+	ld, exists := os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
+	if exists {
+		beelogWALDir = ld
+
+	} else {
+		log.Println("using /tmp as value for beelogWALDir")
+		beelogWALDir = "/tmp"
+	}
+}
 
 func init() {
 	expvar.Publish("raft.status", expvar.Func(func() interface{} {
@@ -119,7 +134,10 @@ type raftNodeConfig struct {
 // LGX: beelogSaveRequest represents an executed raft state, storing all the necessary
 // information for a concurrent routine can assync. persist that state on stable storage.
 type beelogSaveRequest struct {
-	cur     int
+	cur   int
+	first uint64
+	last  uint64
+
 	rd      raft.Ready
 	islead  bool
 	applies []apply
@@ -549,6 +567,7 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 // LGX TODO: discard intermediate applies for the same key, while concurrently
 // processing new raft.Ready's
 func (r *raftNode) startBeelog(rh *raftReadyHandler) {
+	parseBeelogConfigFromEnv()
 	internalTimeoutOnReads := 5 * time.Second
 	ignoreIndex := uint64(4)
 
@@ -565,8 +584,9 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	saveCh := make(chan beelogSaveRequest)
 	defer close(saveCh)
 
-	go r.saveEntriesAndApply(bw, rh, saveCh)
+	go r.saveEntriesAndApply(bw, rh, beelogWALDir, saveCh)
 
+	var firstIdx, lastIdx uint64
 	appliesBatch := make([]apply, 0, logBatchSize)
 	count := 0
 
@@ -666,6 +686,10 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				break
 			}
 
+			if firstIdx == 0 {
+				firstIdx = rd.Entries[0].Index
+			}
+
 			count += len(rd.Entries)
 			appliesBatch = append(appliesBatch, ap)
 
@@ -694,6 +718,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			if err := bw.Log(rd.Entries, true); err != nil {
 				log.Fatalln("failed on beelog.Log, err:", err)
 			}
+			lastIdx = rd.Entries[len(rd.Entries)-1].Index
 
 			// the leader can write to its disk in parallel with replicating to the followers and them
 			// writing to their disks.
@@ -724,7 +749,10 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
 			req := beelogSaveRequest{
-				cur:     bw.Switch(),
+				cur:   bw.Switch(),
+				first: firstIdx,
+				last:  lastIdx,
+
 				rd:      rd,
 				islead:  islead,
 				applies: cpyApplies,
@@ -736,6 +764,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			// reset batch and keep underlying arrays
 			count = 0
+			firstIdx = 0
 			appliesBatch = appliesBatch[:0]
 			r.Advance()
 
@@ -745,21 +774,43 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	}
 }
 
-// LGX: saveEntriesAndApply ...
-func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, reqs <-chan beelogSaveRequest) {
+// LGX: saveEntriesAndApply acts as a writer routine for beelog approach, receiving save requests
+// and concurrently flushing them into stable storage. To ensure safety, applies (and by consequence,
+// client responses) are only sent after entries are sucessfully persisted.
+func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpath string, reqs <-chan beelogSaveRequest) {
 	for req := range reqs {
-		// gofail: var raftBeforeSave struct{}
+		// NOTE: if later needed for recovery, utilize the same WAL metadata (NodeID and ClusterID),
+		// and append first and last indexes
 		//
-		// LGX: stable storage save is done here within the raft scope, once an entry is considered
-		// "COMITTED" for the protocol and before it is considered "APPLIED" within the etcd server
-		if err := r.storage.Save(req.rd.HardState, bw.Entries(req.cur)); err != nil {
+		// metadata := pbutil.MustMarshal(
+		// 	&pb.Metadata{
+		// 		NodeID:     0, //get from node initialization"
+		// 		ClusterID:  0, //get from node initialization"
+		// 		FirstIndex: req.first,
+		// 		LastIndex:  req.last,
+		// 	},
+		// )
+		metadata := []byte{}
+
+		walpath := fmt.Sprintf("%s/%d-%d", dirpath, req.first, req.last)
+		w, err := wal.Create(r.lg, walpath, metadata)
+		if err != nil {
+			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
+		}
+
+		if err := w.Save(req.rd.HardState, bw.Entries(req.cur)); err != nil {
 			if r.lg != nil {
 				r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 			} else {
 				plog.Fatalf("failed to save state and entries error: %v", err)
 			}
 		}
+		w.Close()
 
+		// for now, r.storage is utilized within processRaftEntriesAfterSave instead of
+		// the actual WAL utilized for that batch. Since storage is utilized only within
+		// snapshot procedures, and we completely disabled snapshots for our approach,
+		// maybe theres no need to worry about that :)
 		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
 
 		for _, apl := range req.applies {
