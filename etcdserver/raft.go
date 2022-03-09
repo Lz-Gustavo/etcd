@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -59,16 +60,29 @@ var (
 
 	// LGX:
 	beelogWALDir string
+
+	isBeelogParallelIOEnabled bool
+	secondDiskBeelogWALDir    string
 )
 
 func parseBeelogConfigFromEnv() {
-	ld, exists := os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
-	if exists {
-		beelogWALDir = ld
+	var exists bool
 
-	} else {
-		log.Println("using /tmp as value for beelogWALDir")
+	beelogWALDir, exists = os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
+	if !exists {
+		log.Println("using /tmp as value for ETCD_BEELOG_LOGS_DIR")
 		beelogWALDir = "/tmp"
+	}
+
+	isBeelogParallelIOEnabled, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
+	if isBeelogParallelIOEnabled {
+		log.Println("ETCD_BEELOG_PARALLEL_IO enabled")
+
+		secondDiskBeelogWALDir, exists = os.LookupEnv("ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
+		if !exists {
+			log.Println("using /tmp as value for ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
+			secondDiskBeelogWALDir = "/tmp"
+		}
 	}
 }
 
@@ -575,16 +589,15 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	islead := false
 	bw := NewBeelogWr()
 
-	// a mutex is utilized to preserve order on concurrent goroutines persisting
-	// entries through bw.Entries. The idea is that the 'n'th routine can be concurrently
-	// executed against the <-r.Ready iteration of next entries, but MUST BE executed before
-	// n + 1 routine.
-	//
-	// utilizing a channel instead to provided cheaper synchronization and preserve FIFO
-	saveCh := make(chan beelogSaveRequest)
-	defer close(saveCh)
+	saveChannels := [numTables]chan beelogSaveRequest{make(chan beelogSaveRequest)}
+	defer close(saveChannels[0])
+	go r.saveEntriesAndApply(bw, rh, beelogWALDir, saveChannels[0])
 
-	go r.saveEntriesAndApply(bw, rh, beelogWALDir, saveCh)
+	if isBeelogParallelIOEnabled {
+		saveChannels[1] = make(chan beelogSaveRequest)
+		defer close(saveChannels[1])
+		go r.saveEntriesAndApply(bw, rh, secondDiskBeelogWALDir, saveChannels[1])
+	}
 
 	var firstIdx, lastIdx uint64
 	appliesBatch := make([]apply, 0, logBatchSize)
@@ -748,8 +761,9 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			r.raftStorage.Append(rd.Entries)
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
+			cur := bw.Switch()
 			req := beelogSaveRequest{
-				cur:   bw.Switch(),
+				cur:   cur,
 				first: firstIdx,
 				last:  lastIdx,
 
@@ -760,7 +774,11 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			}
 
 			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
-			saveCh <- req
+			if isBeelogParallelIOEnabled {
+				saveChannels[cur] <- req
+			} else {
+				saveChannels[0] <- req
+			}
 
 			// reset batch and keep underlying arrays
 			count = 0

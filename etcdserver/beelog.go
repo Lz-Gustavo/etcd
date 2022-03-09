@@ -68,7 +68,7 @@ func (bw *BeelogWr) Switch() int {
 func (bw *BeelogWr) Entries(cur int) []raftpb.Entry {
 	defer bw.mu[cur].Unlock()
 
-	ents := make([]raftpb.Entry, 0)
+	ents := make([]raftpb.Entry, 0, len(bw.state[cur]))
 	for _, ent := range bw.state[cur] {
 		ents = append(ents, ent)
 	}
