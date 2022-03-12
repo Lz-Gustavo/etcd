@@ -156,6 +156,9 @@ type beelogSaveRequest struct {
 	islead  bool
 	applies []apply
 	notifyc chan struct{}
+
+	logged   chan<- struct{}
+	canApply chan struct{}
 }
 
 func newRaftNode(cfg raftNodeConfig) *raftNode {
@@ -603,6 +606,10 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	appliesBatch := make([]apply, 0, logBatchSize)
 	count := 0
 
+	// must signal first save routine that it is save to apply its commands
+	previousLoggedChannel := make(chan struct{}, 1)
+	previousLoggedChannel <- struct{}{}
+
 	for {
 		select {
 		case <-r.ticker.C:
@@ -775,7 +782,13 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
 			if isBeelogParallelIOEnabled {
+				ch := make(chan struct{}, 1)
+				req.logged = ch
+				req.canApply = previousLoggedChannel
+
 				saveChannels[cur] <- req
+				previousLoggedChannel = ch
+
 			} else {
 				saveChannels[0] <- req
 			}
@@ -831,6 +844,13 @@ func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpa
 		// maybe theres no need to worry about that :)
 		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
 
+		if isBeelogParallelIOEnabled {
+			req.logged <- struct{}{}
+
+			// wait until previous routine signals its log
+			<-req.canApply
+		}
+
 		for _, apl := range req.applies {
 			updateCommittedIndex(&apl, rh)
 			select {
@@ -838,6 +858,10 @@ func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpa
 			case <-r.stopped:
 				return
 			}
+		}
+
+		if isBeelogParallelIOEnabled {
+			close(req.canApply)
 		}
 	}
 }
