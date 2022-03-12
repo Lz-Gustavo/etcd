@@ -18,9 +18,13 @@ type BeelogWr struct {
 	state [numTables]StateTable
 	mu    [numTables]*sync.Mutex
 	cur   int
+
+	isParallelIO bool
+	writers      [numTables]chan *beelogSaveRequest
+	writersMu    [numTables]*sync.Mutex
 }
 
-func NewBeelogWr() *BeelogWr {
+func NewBeelogWr(isParallelIO bool) *BeelogWr {
 	s := [numTables]StateTable{}
 	m := [numTables]*sync.Mutex{}
 
@@ -29,10 +33,25 @@ func NewBeelogWr() *BeelogWr {
 		m[i] = &sync.Mutex{}
 	}
 
-	return &BeelogWr{
+	wrs := [numTables]chan *beelogSaveRequest{make(chan *beelogSaveRequest)}
+	bw := &BeelogWr{
 		state: s,
 		mu:    m,
+
+		isParallelIO: isParallelIO,
+		writers:      wrs,
 	}
+
+	if isParallelIO {
+		wMu := [numTables]*sync.Mutex{{}}
+		for i := 1; i < numTables; i++ {
+			wMu[i] = &sync.Mutex{}
+			wMu[i].Lock()
+			bw.writers[i] = make(chan *beelogSaveRequest)
+		}
+		bw.writersMu = wMu
+	}
+	return bw
 }
 
 // A call with 'filled' resulting in a nil error, inccurs that bw.Entries()
@@ -59,10 +78,13 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 	return nil
 }
 
-func (bw *BeelogWr) Switch() int {
-	cur := bw.cur
-	bw.advance()
-	return cur
+func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest) {
+	req.cur = bw.switchCur()
+	if !bw.isParallelIO {
+		bw.writers[0] <- req
+		return
+	}
+	bw.writers[req.cur] <- req
 }
 
 func (bw *BeelogWr) Entries(cur int) []raftpb.Entry {
@@ -73,6 +95,36 @@ func (bw *BeelogWr) Entries(cur int) []raftpb.Entry {
 		ents = append(ents, ent)
 	}
 	return ents
+}
+
+func (bw *BeelogWr) WaitToApply(cur int) {
+	if !bw.isParallelIO {
+		return
+	}
+	bw.writersMu[cur].Lock()
+}
+
+func (bw *BeelogWr) Applied(cur int) {
+	if !bw.isParallelIO {
+		return
+	}
+	next := modInt(cur-numTables+1, numTables)
+	bw.writersMu[next].Unlock()
+}
+
+func (bw *BeelogWr) Shutdown() {
+	close(bw.writers[0])
+	if bw.isParallelIO {
+		for i := 1; i < numTables; i++ {
+			close(bw.writers[i])
+		}
+	}
+}
+
+func (bw *BeelogWr) switchCur() int {
+	cur := bw.cur
+	bw.advance()
+	return cur
 }
 
 func (bw *BeelogWr) advance() {

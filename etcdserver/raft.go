@@ -156,9 +156,6 @@ type beelogSaveRequest struct {
 	islead  bool
 	applies []apply
 	notifyc chan struct{}
-
-	logged   chan<- struct{}
-	canApply chan struct{}
 }
 
 func newRaftNode(cfg raftNodeConfig) *raftNode {
@@ -590,25 +587,17 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 	defer r.onStop()
 	islead := false
-	bw := NewBeelogWr()
-
-	saveChannels := [numTables]chan beelogSaveRequest{make(chan beelogSaveRequest)}
-	defer close(saveChannels[0])
-	go r.saveEntriesAndApply(bw, rh, beelogWALDir, saveChannels[0])
+	bw := NewBeelogWr(isBeelogParallelIOEnabled)
+	go r.saveEntriesAndApply(bw, rh, beelogWALDir, bw.writers[0])
 
 	if isBeelogParallelIOEnabled {
-		saveChannels[1] = make(chan beelogSaveRequest)
-		defer close(saveChannels[1])
-		go r.saveEntriesAndApply(bw, rh, secondDiskBeelogWALDir, saveChannels[1])
+		go r.saveEntriesAndApply(bw, rh, secondDiskBeelogWALDir, bw.writers[1])
 	}
+	defer bw.Shutdown()
 
 	var firstIdx, lastIdx uint64
 	appliesBatch := make([]apply, 0, logBatchSize)
 	count := 0
-
-	// must signal first save routine that it is save to apply its commands
-	previousLoggedChannel := make(chan struct{}, 1)
-	previousLoggedChannel <- struct{}{}
 
 	for {
 		select {
@@ -768,9 +757,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			r.raftStorage.Append(rd.Entries)
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
-			cur := bw.Switch()
-			req := beelogSaveRequest{
-				cur:   cur,
+			req := &beelogSaveRequest{
 				first: firstIdx,
 				last:  lastIdx,
 
@@ -781,17 +768,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			}
 
 			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
-			if isBeelogParallelIOEnabled {
-				ch := make(chan struct{}, 1)
-				req.logged = ch
-				req.canApply = previousLoggedChannel
-
-				saveChannels[cur] <- req
-				previousLoggedChannel = ch
-
-			} else {
-				saveChannels[0] <- req
-			}
+			bw.FilledBatch(req)
 
 			// reset batch and keep underlying arrays
 			count = 0
@@ -808,7 +785,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 // LGX: saveEntriesAndApply acts as a writer routine for beelog approach, receiving save requests
 // and concurrently flushing them into stable storage. To ensure safety, applies (and by consequence,
 // client responses) are only sent after entries are sucessfully persisted.
-func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpath string, reqs <-chan beelogSaveRequest) {
+func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
 	for req := range reqs {
 		// NOTE: if later needed for recovery, utilize the same WAL metadata (NodeID and ClusterID),
 		// and append first and last indexes
@@ -844,13 +821,7 @@ func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpa
 		// maybe theres no need to worry about that :)
 		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
 
-		if isBeelogParallelIOEnabled {
-			req.logged <- struct{}{}
-
-			// wait until previous routine signals its log
-			<-req.canApply
-		}
-
+		bw.WaitToApply(req.cur)
 		for _, apl := range req.applies {
 			updateCommittedIndex(&apl, rh)
 			select {
@@ -859,10 +830,7 @@ func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpa
 				return
 			}
 		}
-
-		if isBeelogParallelIOEnabled {
-			close(req.canApply)
-		}
+		bw.Applied(req.cur)
 	}
 }
 

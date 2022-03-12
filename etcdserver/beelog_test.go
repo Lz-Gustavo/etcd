@@ -20,7 +20,7 @@ const (
 func TestBeelogAPI(t *testing.T) {
 	batchSize := 10
 	loggedEntries := make([]raftpb.Entry, 0)
-	bw := NewBeelogWr()
+	bw := NewBeelogWr(false)
 
 	for i := 0; i < batchSize-1; i++ {
 		ents := []raftpb.Entry{getRandEntry(i)}
@@ -37,7 +37,7 @@ func TestBeelogAPI(t *testing.T) {
 	}
 	loggedEntries = append(loggedEntries, ents[0])
 
-	oldCur := bw.Switch()
+	oldCur := bw.switchCur()
 	reducedEntries := make(chan []raftpb.Entry)
 
 	go func() {
@@ -60,7 +60,7 @@ func TestBeelogAPI(t *testing.T) {
 
 func TestBeelogExecutionOnRaft(t *testing.T) {
 	batchSize := 10
-	bw := NewBeelogWr()
+	bw := NewBeelogWr(false)
 
 	// generate 10 * batchsize entries on raft channel
 	raftReady := make(chan raft.Ready)
@@ -83,7 +83,7 @@ func TestBeelogExecutionOnRaft(t *testing.T) {
 		// just calling entries for now, testing possible data race
 		go func(cur int) {
 			bw.Entries(cur)
-		}(bw.Switch())
+		}(bw.switchCur())
 
 		// TODO: delay repply on commited entries
 	}
