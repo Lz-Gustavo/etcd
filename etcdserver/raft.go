@@ -695,7 +695,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				break
 			}
 
-			if firstIdx == 0 {
+			if len(rd.Entries) > 0 && firstIdx == 0 {
 				firstIdx = rd.Entries[0].Index
 			}
 
@@ -798,10 +798,11 @@ func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpa
 		// 		LastIndex:  req.last,
 		// 	},
 		// )
-		metadata := []byte{}
+		// metadata := []byte{}
+		// walpath := fmt.Sprintf("%s/%d-%d", dirpath, req.first, req.last)
+		// w, err := wal.Create(r.lg, walpath, metadata)
 
-		walpath := fmt.Sprintf("%s/%d-%d", dirpath, req.first, req.last)
-		w, err := wal.Create(r.lg, walpath, metadata)
+		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last)
 		if err != nil {
 			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
 		}

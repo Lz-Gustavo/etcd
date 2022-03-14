@@ -78,6 +78,9 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 	return nil
 }
 
+// FilledBatch informs beelog to persist the current table state, scheduling 'req'
+// to its proper writer channel and advancing the cursor to the next available table.
+// The current table stays blocked until a call to Entries() is made.
 func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest) {
 	req.cur = bw.switchCur()
 	if !bw.isParallelIO {
@@ -87,6 +90,8 @@ func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest) {
 	bw.writers[req.cur] <- req
 }
 
+// Entries reads the table state identified by 'cur', returning a compacted slice of
+// its entries and allowing it to receive new ones.
 func (bw *BeelogWr) Entries(cur int) []raftpb.Entry {
 	defer bw.mu[cur].Unlock()
 
@@ -123,12 +128,8 @@ func (bw *BeelogWr) Shutdown() {
 
 func (bw *BeelogWr) switchCur() int {
 	cur := bw.cur
-	bw.advance()
-	return cur
-}
-
-func (bw *BeelogWr) advance() {
 	bw.cur = modInt(bw.cur-numTables+1, numTables)
+	return cur
 }
 
 func modInt(a, b int) int {

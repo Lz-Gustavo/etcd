@@ -126,14 +126,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 
 	p := filepath.Join(tmpdirpath, walName(0, 0))
 
-	// LGX: modified LockFile flag parameters to evaluate O_SYNC implications
-	// on wal performance.
-	flags := os.O_WRONLY | os.O_CREATE
-	if syncIO {
-		flags = flags | os.O_SYNC
-	}
-
-	f, err := fileutil.LockFile(p, flags, fileutil.PrivateFileMode)
+	f, err := fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
 	if err != nil {
 		if lg != nil {
 			lg.Warn(
