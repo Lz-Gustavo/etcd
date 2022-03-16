@@ -88,17 +88,17 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64) (
 		}
 		return nil, err
 	}
-	if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to preallocate an initial WAL file",
-				zap.String("path", p),
-				zap.Int64("segment-bytes", SegmentSizeBytes),
-				zap.Error(err),
-			)
-		}
-		return nil, err
-	}
+	// if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
+	// 	if lg != nil {
+	// 		lg.Warn(
+	// 			"failed to preallocate an initial WAL file",
+	// 			zap.String("path", p),
+	// 			zap.Int64("segment-bytes", SegmentSizeBytes),
+	// 			zap.Error(err),
+	// 		)
+	// 	}
+	// 	return nil, err
+	// }
 
 	w := &WAL{
 		lg:       lg,
