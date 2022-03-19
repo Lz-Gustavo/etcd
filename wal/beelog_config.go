@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"go.etcd.io/etcd/pkg/fileutil"
 	"go.etcd.io/etcd/wal/walpb"
@@ -116,9 +115,13 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64) (
 	if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: metadata}); err != nil {
 		return nil, err
 	}
-	if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
-		return nil, err
-	}
+
+	// NOTE: why saving an empty Snapshot? maybe propose a PR avoiding this
+	// cost on oficial etcd
+	//
+	// if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
+	// 	return nil, err
+	// }
 
 	// if w, err = w.renameWAL(tmpdirpath); err != nil {
 	// 	if lg != nil {
@@ -132,51 +135,53 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64) (
 	// 	return nil, err
 	// }
 
-	var perr error
-	defer func() {
-		if perr != nil {
-			w.cleanupWAL(lg)
-		}
-	}()
+	// LGX: also comment Fsync procedures, since WALs are not renamed
+	//
+	// var perr error
+	// defer func() {
+	// 	if perr != nil {
+	// 		w.cleanupWAL(lg)
+	// 	}
+	// }()
 
-	// directory was renamed; sync parent dir to persist rename
-	pdir, perr := fileutil.OpenDir(filepath.Dir(w.dir))
-	if perr != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to open the parent data directory",
-				zap.String("parent-dir-path", filepath.Dir(w.dir)),
-				zap.String("dir-path", w.dir),
-				zap.Error(perr),
-			)
-		}
-		return nil, perr
-	}
-	start := time.Now()
-	if perr = fileutil.Fsync(pdir); perr != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to fsync the parent data directory file",
-				zap.String("parent-dir-path", filepath.Dir(w.dir)),
-				zap.String("dir-path", w.dir),
-				zap.Error(perr),
-			)
-		}
-		return nil, perr
-	}
-	walFsyncSec.Observe(time.Since(start).Seconds())
+	// // directory was renamed; sync parent dir to persist rename
+	// pdir, perr := fileutil.OpenDir(filepath.Dir(w.dir))
+	// if perr != nil {
+	// 	if lg != nil {
+	// 		lg.Warn(
+	// 			"failed to open the parent data directory",
+	// 			zap.String("parent-dir-path", filepath.Dir(w.dir)),
+	// 			zap.String("dir-path", w.dir),
+	// 			zap.Error(perr),
+	// 		)
+	// 	}
+	// 	return nil, perr
+	// }
+	// start := time.Now()
+	// if perr = fileutil.Fsync(pdir); perr != nil {
+	// 	if lg != nil {
+	// 		lg.Warn(
+	// 			"failed to fsync the parent data directory file",
+	// 			zap.String("parent-dir-path", filepath.Dir(w.dir)),
+	// 			zap.String("dir-path", w.dir),
+	// 			zap.Error(perr),
+	// 		)
+	// 	}
+	// 	return nil, perr
+	// }
+	// walFsyncSec.Observe(time.Since(start).Seconds())
 
-	if perr = pdir.Close(); perr != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to close the parent data directory file",
-				zap.String("parent-dir-path", filepath.Dir(w.dir)),
-				zap.String("dir-path", w.dir),
-				zap.Error(perr),
-			)
-		}
-		return nil, perr
-	}
+	// if perr = pdir.Close(); perr != nil {
+	// 	if lg != nil {
+	// 		lg.Warn(
+	// 			"failed to close the parent data directory file",
+	// 			zap.String("parent-dir-path", filepath.Dir(w.dir)),
+	// 			zap.String("dir-path", w.dir),
+	// 			zap.Error(perr),
+	// 		)
+	// 	}
+	// 	return nil, perr
+	// }
 
 	return w, nil
 }
