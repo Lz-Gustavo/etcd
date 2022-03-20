@@ -545,6 +545,9 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	defer r.onStop()
 	islead := false
 	bw := NewBeelogWrFromEnv(r, rh)
+	if bw == nil {
+		r.lg.Fatal("parsed invalid beelog config from ENV")
+	}
 	defer bw.Shutdown()
 
 	var firstIdx, lastIdx uint64

@@ -41,7 +41,7 @@ func TestBeelogAPI(t *testing.T) {
 	reducedEntries := make(chan []raftpb.Entry)
 
 	go func() {
-		re := bw.Entries(oldCur)
+		re := bw.entries(oldCur)
 		reducedEntries <- re
 	}()
 
@@ -82,7 +82,7 @@ func TestBeelogExecutionOnRaft(t *testing.T) {
 
 		// just calling entries for now, testing possible data race
 		go func(cur int) {
-			bw.Entries(cur)
+			bw.entries(cur)
 		}(bw.switchCur())
 
 		// TODO: delay repply on commited entries

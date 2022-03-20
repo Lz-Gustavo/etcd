@@ -124,15 +124,16 @@ func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest) {
 	bw.writers[req.cur] <- req
 }
 
-// Entries reads the table state identified by 'cur', returning a compacted slice of
+// entries reads the table state identified by 'cur', returning a compacted slice of
 // its entries and allowing it to receive new ones.
-func (bw *BeelogWr) Entries(cur int) []raftpb.Entry {
+func (bw *BeelogWr) entries(cur int) []raftpb.Entry {
 	defer bw.mu[cur].Unlock()
 
 	ents := make([]raftpb.Entry, 0, len(bw.state[cur]))
 	for _, ent := range bw.state[cur] {
 		ents = append(ents, ent)
 	}
+	bw.state[cur] = make(StateTable)
 	return ents
 }
 
@@ -146,7 +147,7 @@ func (bw *BeelogWr) saveEntriesAndApply(r *raftNode, rh *raftReadyHandler, dirpa
 			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
 		}
 
-		if err := w.Save(req.rd.HardState, bw.Entries(req.cur)); err != nil {
+		if err := w.Save(req.rd.HardState, bw.entries(req.cur)); err != nil {
 			if r.lg != nil {
 				r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 			} else {
