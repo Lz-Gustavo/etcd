@@ -20,7 +20,7 @@ const (
 func TestBeelogAPI(t *testing.T) {
 	batchSize := 10
 	loggedEntries := make([]raftpb.Entry, 0)
-	bw := NewBeelogWr(false)
+	bw := NewBeelogWr(2, false, []string{"/tmp"}, nil, nil)
 
 	for i := 0; i < batchSize-1; i++ {
 		ents := []raftpb.Entry{getRandEntry(i)}
@@ -60,7 +60,7 @@ func TestBeelogAPI(t *testing.T) {
 
 func TestBeelogExecutionOnRaft(t *testing.T) {
 	batchSize := 10
-	bw := NewBeelogWr(false)
+	bw := NewBeelogWr(2, false, []string{"/tmp"}, nil, nil)
 
 	// generate 10 * batchsize entries on raft channel
 	raftReady := make(chan raft.Ready)
@@ -86,6 +86,52 @@ func TestBeelogExecutionOnRaft(t *testing.T) {
 		}(bw.switchCur())
 
 		// TODO: delay repply on commited entries
+	}
+}
+
+func TestIsValidBeelogConfig(t *testing.T) {
+	testCases := []struct {
+		name         string
+		numTables    int
+		isParallelIO bool
+		dirs         []string
+		expectedOut  bool
+	}{
+		{
+			"two tables, no parallelism",
+			2,
+			false,
+			[]string{"/tmp"},
+			true,
+		},
+		{
+			"two tables, parallelism, two dirs",
+			2,
+			true,
+			[]string{"/tmp", "/tmp2"},
+			true,
+		},
+		{
+			"ten tables, parallelism, a single dir",
+			10,
+			true,
+			[]string{"/tmp"},
+			false,
+		},
+		{
+			"empty dir",
+			2,
+			false,
+			[]string{},
+			false,
+		},
+	}
+
+	for _, tc := range testCases {
+		out := isValidBeelogConfig(tc.numTables, tc.isParallelIO, tc.dirs)
+		if out != tc.expectedOut {
+			t.Fatal("failed on test", tc.name)
+		}
 	}
 }
 

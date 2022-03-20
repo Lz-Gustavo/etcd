@@ -4,50 +4,71 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"log"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
+	"go.etcd.io/etcd/wal"
+	"go.uber.org/zap"
 )
-
-const numTables int = 2
 
 type StateTable map[int64]raftpb.Entry
 
 type BeelogWr struct {
-	state [numTables]StateTable
-	mu    [numTables]*sync.Mutex
-	cur   int
+	state     []StateTable
+	mu        []*sync.Mutex
+	cur       int
+	numTables int
 
 	isParallelIO bool
-	writers      [numTables]chan *beelogSaveRequest
-	writersMu    [numTables]*sync.Mutex
+	writers      []chan *beelogSaveRequest
+	writersMu    []*sync.Mutex
 }
 
-func NewBeelogWr(isParallelIO bool) *BeelogWr {
-	s := [numTables]StateTable{}
-	m := [numTables]*sync.Mutex{}
+func NewBeelogWrFromEnv(r *raftNode, rh *raftReadyHandler) *BeelogWr {
+	numTables, isParisParallelIO, dirs := parseBeelogConfigFromEnv()
+	return NewBeelogWr(numTables, isParisParallelIO, dirs, r, rh)
+}
+
+func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, rh *raftReadyHandler) *BeelogWr {
+	if !isValidBeelogConfig(numTables, isParallelIO, dirs) {
+		return nil
+	}
+
+	s := make([]StateTable, numTables)
+	m := make([]*sync.Mutex, numTables)
 
 	for i := 0; i < numTables; i++ {
 		s[i] = make(StateTable)
 		m[i] = &sync.Mutex{}
 	}
 
-	wrs := [numTables]chan *beelogSaveRequest{make(chan *beelogSaveRequest)}
+	wrs := make([]chan *beelogSaveRequest, numTables)
+	wrs[0] = make(chan *beelogSaveRequest)
 	bw := &BeelogWr{
-		state: s,
-		mu:    m,
+		state:     s,
+		mu:        m,
+		numTables: numTables,
 
 		isParallelIO: isParallelIO,
 		writers:      wrs,
 	}
+	go bw.saveEntriesAndApply(r, rh, dirs[0], wrs[0])
 
 	if isParallelIO {
-		wMu := [numTables]*sync.Mutex{{}}
+		wMu := make([]*sync.Mutex, numTables)
+		wMu[0] = &sync.Mutex{}
 		for i := 1; i < numTables; i++ {
 			wMu[i] = &sync.Mutex{}
 			wMu[i].Lock()
 			bw.writers[i] = make(chan *beelogSaveRequest)
+
+			go bw.saveEntriesAndApply(r, rh, dirs[i], bw.writers[i])
 		}
 		bw.writersMu = wMu
 	}
@@ -78,6 +99,19 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 	return nil
 }
 
+// beelogSaveRequest represents an executed raft state, storing all the necessary
+// information for a concurrent routine can assync. persist that state on stable storage.
+type beelogSaveRequest struct {
+	cur   int
+	first uint64
+	last  uint64
+
+	rd      raft.Ready
+	islead  bool
+	applies []apply
+	notifyc chan struct{}
+}
+
 // FilledBatch informs beelog to persist the current table state, scheduling 'req'
 // to its proper writer channel and advancing the cursor to the next available table.
 // The current table stays blocked until a call to Entries() is made.
@@ -102,25 +136,63 @@ func (bw *BeelogWr) Entries(cur int) []raftpb.Entry {
 	return ents
 }
 
-func (bw *BeelogWr) WaitToApply(cur int) {
+// saveEntriesAndApply acts as a writer routine for beelog approach, receiving save requests
+// and concurrently flushing them into stable storage. To ensure safety, applies (and by consequence,
+// client responses) are only sent after entries are sucessfully persisted.
+func (bw *BeelogWr) saveEntriesAndApply(r *raftNode, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
+	for req := range reqs {
+		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last)
+		if err != nil {
+			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
+		}
+
+		if err := w.Save(req.rd.HardState, bw.Entries(req.cur)); err != nil {
+			if r.lg != nil {
+				r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+			} else {
+				plog.Fatalf("failed to save state and entries error: %v", err)
+			}
+		}
+		w.Close()
+
+		// for now, r.storage is utilized within processRaftEntriesAfterSave instead of
+		// the actual WAL utilized for that batch. Since storage is utilized only within
+		// snapshot procedures, and we completely disabled snapshots for our approach,
+		// maybe theres no need to worry about that :)
+		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
+
+		bw.waitToApply(req.cur)
+		for _, apl := range req.applies {
+			updateCommittedIndex(&apl, rh)
+			select {
+			case r.applyc <- apl:
+			case <-r.stopped:
+				return
+			}
+		}
+		bw.signalApplied(req.cur)
+	}
+}
+
+func (bw *BeelogWr) waitToApply(cur int) {
 	if !bw.isParallelIO {
 		return
 	}
 	bw.writersMu[cur].Lock()
 }
 
-func (bw *BeelogWr) Applied(cur int) {
+func (bw *BeelogWr) signalApplied(cur int) {
 	if !bw.isParallelIO {
 		return
 	}
-	next := modInt(cur-numTables+1, numTables)
+	next := modInt(cur-bw.numTables+1, bw.numTables)
 	bw.writersMu[next].Unlock()
 }
 
 func (bw *BeelogWr) Shutdown() {
 	close(bw.writers[0])
 	if bw.isParallelIO {
-		for i := 1; i < numTables; i++ {
+		for i := 1; i < bw.numTables; i++ {
 			close(bw.writers[i])
 		}
 	}
@@ -128,7 +200,7 @@ func (bw *BeelogWr) Shutdown() {
 
 func (bw *BeelogWr) switchCur() int {
 	cur := bw.cur
-	bw.cur = modInt(bw.cur-numTables+1, numTables)
+	bw.cur = modInt(bw.cur-bw.numTables+1, bw.numTables)
 	return cur
 }
 
@@ -168,4 +240,33 @@ func getKeyFromRaftEntry(ent raftpb.Entry) (int64, error) {
 		return 0, err
 	}
 	return key, nil
+}
+
+func parseBeelogConfigFromEnv() (concLevel int, isParallelIO bool, dirs []string) {
+	concLevel, _ = strconv.Atoi(os.Getenv("ETCD_BEELOG_CONC_LEVEL"))
+	if concLevel <= 0 {
+		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
+		concLevel = defaultBeelogConcLevel
+	}
+
+	dir, exists := os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
+	if !exists {
+		log.Println("using /tmp as value for ETCD_BEELOG_LOGS_DIR")
+		dir = "/tmp"
+	}
+	dirs = strings.Split(dir, ",")
+
+	isParallelIO, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
+	return
+}
+
+func isValidBeelogConfig(numTables int, isParallelIO bool, dirs []string) bool {
+	if len(dirs) == 0 || numTables < 1 {
+		return false
+	}
+
+	if isParallelIO && (len(dirs) < numTables) {
+		return false
+	}
+	return true
 }

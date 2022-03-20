@@ -19,9 +19,7 @@ import (
 	"expvar"
 	"fmt"
 	"log"
-	"os"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -57,34 +55,7 @@ var (
 	// so only register a func that calls raftStatus
 	// and change raftStatus as we need.
 	raftStatus func() raft.Status
-
-	// LGX:
-	beelogWALDir string
-
-	isBeelogParallelIOEnabled bool
-	secondDiskBeelogWALDir    string
 )
-
-func parseBeelogConfigFromEnv() {
-	var exists bool
-
-	beelogWALDir, exists = os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
-	if !exists {
-		log.Println("using /tmp as value for ETCD_BEELOG_LOGS_DIR")
-		beelogWALDir = "/tmp"
-	}
-
-	isBeelogParallelIOEnabled, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
-	if isBeelogParallelIOEnabled {
-		log.Println("ETCD_BEELOG_PARALLEL_IO enabled")
-
-		secondDiskBeelogWALDir, exists = os.LookupEnv("ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
-		if !exists {
-			log.Println("using /tmp as value for ETCD_BEELOG_SECOND_DISK_LOGS_DIR")
-			secondDiskBeelogWALDir = "/tmp"
-		}
-	}
-}
 
 func init() {
 	expvar.Publish("raft.status", expvar.Func(func() interface{} {
@@ -143,19 +114,6 @@ type raftNodeConfig struct {
 	// clients should timeout and reissue their messages.
 	// If transport is nil, server will panic.
 	transport rafthttp.Transporter
-}
-
-// LGX: beelogSaveRequest represents an executed raft state, storing all the necessary
-// information for a concurrent routine can assync. persist that state on stable storage.
-type beelogSaveRequest struct {
-	cur   int
-	first uint64
-	last  uint64
-
-	rd      raft.Ready
-	islead  bool
-	applies []apply
-	notifyc chan struct{}
 }
 
 func newRaftNode(cfg raftNodeConfig) *raftNode {
@@ -581,18 +539,12 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 // LGX TODO: discard intermediate applies for the same key, while concurrently
 // processing new raft.Ready's
 func (r *raftNode) startBeelog(rh *raftReadyHandler) {
-	parseBeelogConfigFromEnv()
 	internalTimeoutOnReads := 5 * time.Second
 	ignoreIndex := uint64(4)
 
 	defer r.onStop()
 	islead := false
-	bw := NewBeelogWr(isBeelogParallelIOEnabled)
-	go r.saveEntriesAndApply(bw, rh, beelogWALDir, bw.writers[0])
-
-	if isBeelogParallelIOEnabled {
-		go r.saveEntriesAndApply(bw, rh, secondDiskBeelogWALDir, bw.writers[1])
-	}
+	bw := NewBeelogWrFromEnv(r, rh)
 	defer bw.Shutdown()
 
 	var firstIdx, lastIdx uint64
@@ -779,59 +731,6 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 		case <-r.stopped:
 			return
 		}
-	}
-}
-
-// LGX: saveEntriesAndApply acts as a writer routine for beelog approach, receiving save requests
-// and concurrently flushing them into stable storage. To ensure safety, applies (and by consequence,
-// client responses) are only sent after entries are sucessfully persisted.
-func (r *raftNode) saveEntriesAndApply(bw *BeelogWr, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
-	for req := range reqs {
-		// NOTE: if later needed for recovery, utilize the same WAL metadata (NodeID and ClusterID),
-		// and append first and last indexes
-		//
-		// metadata := pbutil.MustMarshal(
-		// 	&pb.Metadata{
-		// 		NodeID:     0, //get from node initialization"
-		// 		ClusterID:  0, //get from node initialization"
-		// 		FirstIndex: req.first,
-		// 		LastIndex:  req.last,
-		// 	},
-		// )
-		// metadata := []byte{}
-		// walpath := fmt.Sprintf("%s/%d-%d", dirpath, req.first, req.last)
-		// w, err := wal.Create(r.lg, walpath, metadata)
-
-		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last)
-		if err != nil {
-			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
-		}
-
-		if err := w.Save(req.rd.HardState, bw.Entries(req.cur)); err != nil {
-			if r.lg != nil {
-				r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
-			} else {
-				plog.Fatalf("failed to save state and entries error: %v", err)
-			}
-		}
-		w.Close()
-
-		// for now, r.storage is utilized within processRaftEntriesAfterSave instead of
-		// the actual WAL utilized for that batch. Since storage is utilized only within
-		// snapshot procedures, and we completely disabled snapshots for our approach,
-		// maybe theres no need to worry about that :)
-		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
-
-		bw.WaitToApply(req.cur)
-		for _, apl := range req.applies {
-			updateCommittedIndex(&apl, rh)
-			select {
-			case r.applyc <- apl:
-			case <-r.stopped:
-				return
-			}
-		}
-		bw.Applied(req.cur)
 	}
 }
 
