@@ -474,7 +474,6 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 
 			// start a new timer for the current batch if not yet initialized
 			if mustResetBatchTimer {
-				batchTimer.Stop()
 				batchTimer.Reset(maxBatchFillTimeout)
 				mustResetBatchTimer = false
 			}
@@ -501,6 +500,7 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 			}
 
 			// batch is now filled
+			batchTimer.Stop()
 			r.processRaftEntriesBeforeSave(islead, rd)
 			if err := r.storage.Save(rd.HardState, entriesBatch); err != nil {
 				if r.lg != nil {
@@ -642,7 +642,6 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			// start a new timer for the current batch if not yet initialized
 			if mustResetBatchTimer {
-				batchTimer.Stop()
 				batchTimer.Reset(maxBatchFillTimeout)
 				mustResetBatchTimer = false
 			}
@@ -676,6 +675,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			}
 
 			// batch is now filled
+			batchTimer.Stop()
 			if err := bw.Log(rd.Entries, true); err != nil {
 				log.Fatalln("failed on beelog.Log, err:", err)
 			}
