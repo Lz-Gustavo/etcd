@@ -385,13 +385,16 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 	defer r.onStop()
 	islead := false
 
-	var batchTimer *time.Timer
 	entriesBatch := make([]raftpb.Entry, 0, logBatchSize)
 	appliesBatch := make([]apply, 0, logBatchSize)
 	count := 0
 
-BREAK:
+	batchTimer := time.NewTimer(time.Second)
+	batchTimer.Stop()
+	mustResetBatchTimer := true
+
 	for {
+	OUT:
 		select {
 		case <-r.ticker.C:
 			r.tick()
@@ -469,8 +472,11 @@ BREAK:
 			entriesBatch = append(entriesBatch, rd.Entries...)
 			appliesBatch = append(appliesBatch, ap)
 
-			if batchTimer == nil {
-				batchTimer = time.NewTimer(maxBatchFillTimeout)
+			// start a new timer for the current batch if not yet initialized
+			if mustResetBatchTimer {
+				batchTimer.Stop()
+				batchTimer.Reset(maxBatchFillTimeout)
+				mustResetBatchTimer = false
 			}
 
 			select {
@@ -490,7 +496,7 @@ BREAK:
 
 					r.raftStorage.Append(rd.Entries)
 					r.Advance()
-					goto BREAK
+					break OUT
 				}
 			}
 
@@ -522,7 +528,7 @@ BREAK:
 			count = 0
 			entriesBatch = entriesBatch[:0]
 			appliesBatch = appliesBatch[:0]
-			batchTimer = nil
+			mustResetBatchTimer = true
 			r.Advance()
 
 		case <-r.stopped:
@@ -549,8 +555,12 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	appliesBatch := make([]apply, 0, logBatchSize)
 	count := 0
 
-BREAK:
+	batchTimer := time.NewTimer(time.Second)
+	batchTimer.Stop()
+	mustResetBatchTimer := true
+
 	for {
+	OUT:
 		select {
 		case <-r.ticker.C:
 			r.tick()
@@ -630,15 +640,15 @@ BREAK:
 			}
 			appliesBatch = append(appliesBatch, ap)
 
-			// start a new timer for the current cursor if not yet initialized
-			//
-			// TODO: find a way to encapsulate this. Theres no sense in acessing 'bw.cur' here
-			if bw.Timers[bw.cur] == nil {
-				bw.Timers[bw.cur] = time.NewTimer(maxBatchFillTimeout)
+			// start a new timer for the current batch if not yet initialized
+			if mustResetBatchTimer {
+				batchTimer.Stop()
+				batchTimer.Reset(maxBatchFillTimeout)
+				mustResetBatchTimer = false
 			}
 
 			select {
-			case <-bw.Timers[bw.cur].C:
+			case <-batchTimer.C:
 				break
 
 			default:
@@ -661,7 +671,7 @@ BREAK:
 
 					r.raftStorage.Append(rd.Entries)
 					r.Advance()
-					goto BREAK
+					break OUT
 				}
 			}
 
@@ -689,9 +699,6 @@ BREAK:
 				notifyc: notifyc,
 			}
 
-			// must reset timer before FilledBatch, or else cursor could have already been advanced
-			bw.Timers[bw.cur] = nil
-
 			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
 			bw.FilledBatch(req)
 
@@ -699,6 +706,7 @@ BREAK:
 			count = 0
 			firstIdx = 0
 			appliesBatch = appliesBatch[:0]
+			mustResetBatchTimer = true
 			r.Advance()
 
 		case <-r.stopped:

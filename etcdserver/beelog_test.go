@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"reflect"
 	"testing"
+	"time"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
 	"go.etcd.io/etcd/pkg/pbutil"
@@ -133,6 +134,56 @@ func TestIsValidBeelogConfig(t *testing.T) {
 			t.Fatal("failed on test", tc.name)
 		}
 	}
+}
+
+func BenchmarkBatchTimerApproaches(b *testing.B) {
+	n := 100000
+	batchSize, count := 10, 0
+	dur := 10 * time.Millisecond
+
+	b.Run("initializing new timer on each batch", func(b *testing.B) {
+		var batchTimer *time.Timer
+
+	FOR:
+		for i := 0; i < n; i++ {
+			if batchTimer == nil {
+				batchTimer = time.NewTimer(dur)
+			}
+
+			select {
+			case <-batchTimer.C:
+			default:
+				if count++; count < batchSize {
+					continue FOR
+				}
+			}
+			batchTimer = nil
+		}
+	})
+
+	b.Run("Stop and Reset timer on each batch", func(b *testing.B) {
+		batchTimer := time.NewTimer(time.Second)
+		batchTimer.Stop()
+		mustResetTimer := true
+
+	FOR:
+		for i := 0; i < n; i++ {
+			if mustResetTimer {
+				batchTimer.Stop()
+				batchTimer.Reset(dur)
+				mustResetTimer = false
+			}
+
+			select {
+			case <-batchTimer.C:
+			default:
+				if count++; count < batchSize {
+					continue FOR
+				}
+			}
+			mustResetTimer = true
+		}
+	})
 }
 
 func getRandEntry(index int) raftpb.Entry {

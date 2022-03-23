@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
 	"go.etcd.io/etcd/raft"
@@ -29,7 +28,6 @@ type BeelogWr struct {
 	isParallelIO bool
 	writers      []chan *beelogSaveRequest
 	writersMu    []*sync.Mutex
-	Timers       []*time.Timer
 }
 
 func NewBeelogWrFromEnv(r *raftNode, rh *raftReadyHandler) *BeelogWr {
@@ -59,7 +57,6 @@ func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, r
 
 		isParallelIO: isParallelIO,
 		writers:      wrs,
-		Timers:       make([]*time.Timer, numTables),
 	}
 	go bw.saveEntriesAndApply(r, rh, dirs[0], wrs[0])
 
