@@ -695,12 +695,11 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 				rd:      rd,
 				islead:  islead,
-				applies: cpyApplies,
 				notifyc: notifyc,
 			}
 
 			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
-			bw.FilledBatch(req)
+			bw.FilledBatch(req, cpyApplies)
 
 			// reset batch and keep underlying arrays
 			count = 0
@@ -745,7 +744,7 @@ func (r *raftNode) processRaftEntriesBeforeSave(islead bool, rd raft.Ready) {
 // LGX: utilized only on startBatchWAL and startBeelog, processRaftEntriesAfterSave executes
 // all procedures previously implemented by the etcd standard raft implementation after log
 // persistence.
-func (r *raftNode) processRaftEntriesAfterSave(islead bool, rd raft.Ready, notifyc chan struct{}) {
+func (r *raftNode) processRaftEntriesAfterSave(islead bool, rd raft.Ready, notifyc chan<- struct{}) {
 	if !raft.IsEmptyHardState(rd.HardState) {
 		proposalsCommitted.Set(float64(rd.HardState.Commit))
 	}

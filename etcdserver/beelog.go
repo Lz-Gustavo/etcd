@@ -27,7 +27,7 @@ type BeelogWr struct {
 
 	isParallelIO bool
 	writers      []chan *beelogSaveRequest
-	writersMu    []*sync.Mutex
+	applyReqs    chan applyEntriesRequest
 }
 
 func NewBeelogWrFromEnv(r *raftNode, rh *raftReadyHandler) *BeelogWr {
@@ -57,20 +57,16 @@ func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, r
 
 		isParallelIO: isParallelIO,
 		writers:      wrs,
+		applyReqs:    make(chan applyEntriesRequest, numTables),
 	}
-	go bw.saveEntriesAndApply(r, rh, dirs[0], wrs[0])
+	go bw.applyEntries(r, rh)
+	go bw.saveEntries(r, rh, dirs[0], wrs[0])
 
 	if isParallelIO {
-		wMu := make([]*sync.Mutex, numTables)
-		wMu[0] = &sync.Mutex{}
 		for i := 1; i < numTables; i++ {
-			wMu[i] = &sync.Mutex{}
-			wMu[i].Lock()
 			bw.writers[i] = make(chan *beelogSaveRequest)
-
-			go bw.saveEntriesAndApply(r, rh, dirs[i], bw.writers[i])
+			go bw.saveEntries(r, rh, dirs[i], bw.writers[i])
 		}
-		bw.writersMu = wMu
 	}
 	return bw
 }
@@ -106,17 +102,30 @@ type beelogSaveRequest struct {
 	first uint64
 	last  uint64
 
-	rd      raft.Ready
-	islead  bool
-	applies []apply
-	notifyc chan struct{}
+	rd        raft.Ready
+	islead    bool
+	notifyc   chan<- struct{}
+	persisted chan<- struct{}
+}
+
+type applyEntriesRequest struct {
+	applies   []apply
+	persisted chan struct{}
 }
 
 // FilledBatch informs beelog to persist the current table state, scheduling 'req'
 // to its proper writer channel and advancing the cursor to the next available table.
 // The current table stays blocked until a call to Entries() is made.
-func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest) {
+func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest, applies []apply) {
 	req.cur = bw.switchCur()
+	ch := make(chan struct{}, 1)
+
+	req.persisted = ch
+	bw.applyReqs <- applyEntriesRequest{
+		applies:   applies,
+		persisted: ch,
+	}
+
 	if !bw.isParallelIO {
 		bw.writers[0] <- req
 		return
@@ -137,10 +146,10 @@ func (bw *BeelogWr) entries(cur int) []raftpb.Entry {
 	return ents
 }
 
-// saveEntriesAndApply acts as a writer routine for beelog approach, receiving save requests
-// and concurrently flushing them into stable storage. To ensure safety, applies (and by consequence,
-// client responses) are only sent after entries are sucessfully persisted.
-func (bw *BeelogWr) saveEntriesAndApply(r *raftNode, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
+// saveEntries acts as a writer routine for beelog approach, receiving save requests and
+// concurrently flushing them into stable storage. To ensure safety, applies (and by consequence,
+// client responses) are only notified after entries are sucessfully persisted.
+func (bw *BeelogWr) saveEntries(r *raftNode, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
 	for req := range reqs {
 		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last)
 		if err != nil {
@@ -162,32 +171,28 @@ func (bw *BeelogWr) saveEntriesAndApply(r *raftNode, rh *raftReadyHandler, dirpa
 		// maybe theres no need to worry about that :)
 		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
 
-		bw.waitToApply(req.cur)
-		for _, apl := range req.applies {
-			updateCommittedIndex(&apl, rh)
-			select {
-			case r.applyc <- apl:
-			case <-r.stopped:
-				return
+		req.persisted <- struct{}{}
+	}
+}
+
+func (bw *BeelogWr) applyEntries(r *raftNode, rh *raftReadyHandler) {
+	for req := range bw.applyReqs {
+		select {
+		case <-req.persisted:
+			for _, apl := range req.applies {
+				updateCommittedIndex(&apl, rh)
+				select {
+				case r.applyc <- apl:
+				case <-r.stopped:
+					return
+				}
 			}
+			close(req.persisted)
+
+		case <-r.stopped:
+			return
 		}
-		bw.signalApplied(req.cur)
 	}
-}
-
-func (bw *BeelogWr) waitToApply(cur int) {
-	if !bw.isParallelIO {
-		return
-	}
-	bw.writersMu[cur].Lock()
-}
-
-func (bw *BeelogWr) signalApplied(cur int) {
-	if !bw.isParallelIO {
-		return
-	}
-	next := modInt(cur-bw.numTables+1, bw.numTables)
-	bw.writersMu[next].Unlock()
 }
 
 func (bw *BeelogWr) Shutdown() {
