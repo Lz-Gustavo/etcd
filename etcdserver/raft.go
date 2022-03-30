@@ -46,7 +46,7 @@ const (
 	maxInflightMsgs = 4096 / 8
 
 	// LGX:
-	maxBatchFillTimeout = 10 * time.Second
+	maxBatchFillTimeout = 500 * time.Millisecond
 )
 
 var (
@@ -393,11 +393,47 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 	batchTimer.Stop()
 	mustResetBatchTimer := true
 
+	var lastReady *raft.Ready
+	var lastNotifyc *chan struct{}
+
 	for {
-	OUT:
 		select {
 		case <-r.ticker.C:
 			r.tick()
+
+		case <-batchTimer.C:
+			batchTimer.Stop()
+
+			// must consume last notifyc var. Apply routine will later be freed by r.processRaftEntriesAfterSave()
+			// beelog.saveEntries()
+			<-*lastNotifyc
+
+			r.processRaftEntriesBeforeSave(islead, (*lastReady))
+			if err := r.storage.Save((*lastReady).HardState, entriesBatch); err != nil {
+				if r.lg != nil {
+					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
+				} else {
+					plog.Fatalf("failed to save state and entries error: %v", err)
+				}
+			}
+
+			// must NOT r.raftStorage.Append(rd.Entries), since they were previously appended
+			r.processRaftEntriesAfterSave(islead, (*lastReady), *lastNotifyc)
+			for _, apl := range appliesBatch {
+				updateCommittedIndex(&apl, rh)
+				select {
+				case r.applyc <- apl:
+				case <-r.stopped:
+					return
+				}
+			}
+
+			// reset batch and keep underlying arrays
+			count = 0
+			entriesBatch = entriesBatch[:0]
+			appliesBatch = appliesBatch[:0]
+			mustResetBatchTimer = true
+
 		case rd := <-r.Ready():
 			if rd.SoftState != nil {
 				newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
@@ -471,6 +507,8 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 
 			entriesBatch = append(entriesBatch, rd.Entries...)
 			appliesBatch = append(appliesBatch, ap)
+			lastNotifyc = &notifyc
+			lastReady = &rd
 
 			// start a new timer for the current batch if not yet initialized
 			if mustResetBatchTimer {
@@ -478,25 +516,19 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				mustResetBatchTimer = false
 			}
 
-			select {
-			case <-batchTimer.C:
-				break
-
-			default:
-				count += len(rd.Entries)
-				if count < logBatchSize {
-					if islead {
-						// gofail: var raftBeforeLeaderSend struct{}
-						r.transport.Send(r.processMessages(rd.Messages))
-					}
-
-					// notify apply routine
-					notifyc <- struct{}{}
-
-					r.raftStorage.Append(rd.Entries)
-					r.Advance()
-					break OUT
+			count += len(rd.Entries)
+			if count < logBatchSize {
+				if islead {
+					// gofail: var raftBeforeLeaderSend struct{}
+					r.transport.Send(r.processMessages(rd.Messages))
 				}
+
+				// notify apply routine
+				notifyc <- struct{}{}
+
+				r.raftStorage.Append(rd.Entries)
+				r.Advance()
+				break
 			}
 
 			// batch is now filled
@@ -513,7 +545,7 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 			r.raftStorage.Append(rd.Entries)
 			r.processRaftEntriesAfterSave(islead, rd, notifyc)
 
-			// LGX: on batch config, applies must be sent AFTER commands are successfully
+			// on batch config, applies must be sent AFTER commands are successfully
 			// written to stable storage.
 			for _, apl := range appliesBatch {
 				updateCommittedIndex(&apl, rh)
@@ -559,11 +591,48 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	batchTimer.Stop()
 	mustResetBatchTimer := true
 
+	var lastReady *raft.Ready
+	var lastNotifyc *chan struct{}
+
 	for {
-	OUT:
 		select {
 		case <-r.ticker.C:
 			r.tick()
+
+		case <-batchTimer.C:
+			batchTimer.Stop()
+
+			// must consume last notifyc var. Apply routine will later be freed by r.processRaftEntriesAfterSave()
+			// beelog.saveEntries()
+			<-*lastNotifyc
+
+			// must NOT log (*lastReady).Entries nor call r.raftStorage.Append(rd.Entries), since
+			// they were previously logged and appended before.
+			//
+			// Log(nil, true) simply locks the current table
+			bw.Log(nil, true)
+			lastIdx = (*lastReady).Entries[len((*lastReady).Entries)-1].Index
+			r.processRaftEntriesBeforeSave(islead, (*lastReady))
+
+			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
+			req := &beelogSaveRequest{
+				first: firstIdx,
+				last:  lastIdx,
+
+				rd:      *lastReady,
+				islead:  islead,
+				notifyc: *lastNotifyc,
+			}
+
+			// sending requests to be assynchrously persisted by saveEntriesAndApply routine
+			bw.FilledBatch(req, cpyApplies)
+
+			// reset batch and keep underlying arrays
+			count = 0
+			firstIdx = 0
+			appliesBatch = appliesBatch[:0]
+			mustResetBatchTimer = true
+
 		case rd := <-r.Ready():
 			if rd.SoftState != nil {
 				newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
@@ -639,6 +708,8 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				firstIdx = rd.Entries[0].Index
 			}
 			appliesBatch = append(appliesBatch, ap)
+			lastNotifyc = &notifyc
+			lastReady = &rd
 
 			// start a new timer for the current batch if not yet initialized
 			if mustResetBatchTimer {
@@ -646,32 +717,23 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				mustResetBatchTimer = false
 			}
 
-			select {
-			case <-batchTimer.C:
-				break
-
-			default:
-				count += len(rd.Entries)
-				if count < logBatchSize {
-					if err := bw.Log(rd.Entries, false); err != nil {
-						log.Fatalln("failed on beelog.Log, err:", err)
-					}
-
-					// TODO: for some reason read requests are still not advancing the protocol
-					// state when not applied, investigate later
-
-					if islead {
-						// gofail: var raftBeforeLeaderSend struct{}
-						r.transport.Send(r.processMessages(rd.Messages))
-					}
-
-					// notify apply routine
-					notifyc <- struct{}{}
-
-					r.raftStorage.Append(rd.Entries)
-					r.Advance()
-					break OUT
+			count += len(rd.Entries)
+			if count < logBatchSize {
+				if err := bw.Log(rd.Entries, false); err != nil {
+					log.Fatalln("failed on beelog.Log, err:", err)
 				}
+
+				if islead {
+					// gofail: var raftBeforeLeaderSend struct{}
+					r.transport.Send(r.processMessages(rd.Messages))
+				}
+
+				// notify apply routine
+				notifyc <- struct{}{}
+
+				r.raftStorage.Append(rd.Entries)
+				r.Advance()
+				break
 			}
 
 			// batch is now filled

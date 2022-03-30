@@ -49,7 +49,7 @@ func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, r
 	}
 
 	wrs := make([]chan *beelogSaveRequest, numTables)
-	wrs[0] = make(chan *beelogSaveRequest)
+	wrs[0] = make(chan *beelogSaveRequest, 1)
 	bw := &BeelogWr{
 		state:     s,
 		mu:        m,
@@ -64,7 +64,7 @@ func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, r
 
 	if isParallelIO {
 		for i := 1; i < numTables; i++ {
-			bw.writers[i] = make(chan *beelogSaveRequest)
+			bw.writers[i] = make(chan *beelogSaveRequest, 1)
 			go bw.saveEntries(r, rh, dirs[i], bw.writers[i])
 		}
 	}
