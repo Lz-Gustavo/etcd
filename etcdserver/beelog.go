@@ -136,13 +136,13 @@ func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest, applies []apply) {
 // entries reads the table state identified by 'cur', returning a compacted slice of
 // its entries and allowing it to receive new ones.
 func (bw *BeelogWr) entries(cur int) []raftpb.Entry {
-	defer bw.mu[cur].Unlock()
-
 	ents := make([]raftpb.Entry, 0, len(bw.state[cur]))
 	for _, ent := range bw.state[cur] {
 		ents = append(ents, ent)
 	}
+
 	bw.state[cur] = make(StateTable)
+	bw.mu[cur].Unlock()
 	return ents
 }
 
@@ -151,12 +151,13 @@ func (bw *BeelogWr) entries(cur int) []raftpb.Entry {
 // client responses) are only notified after entries are sucessfully persisted.
 func (bw *BeelogWr) saveEntries(r *raftNode, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
 	for req := range reqs {
-		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last)
+		ents := bw.entries(req.cur)
+		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last, len(ents))
 		if err != nil {
 			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
 		}
 
-		if err := w.Save(req.rd.HardState, bw.entries(req.cur)); err != nil {
+		if err := w.Save(req.rd.HardState, ents); err != nil {
 			if r.lg != nil {
 				r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 			} else {

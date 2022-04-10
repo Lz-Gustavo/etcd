@@ -33,7 +33,7 @@ func init() {
 //   * an empty metadata is always used
 //   * a temporary dir, and a later rename to the actual filepath, are not done.
 //     (the previous instructions for this procedure are intentionally left commented for now)
-func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64) (*WAL, error) {
+func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, logSize int) (*WAL, error) {
 	// utilizing an always empty metadata for beelog WAL
 	metadata := []byte{}
 
@@ -57,7 +57,7 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64) (
 	// 	return nil, err
 	// }
 
-	p := filepath.Join(dirpath, fmt.Sprintf("%d-%d.log", firstIdx, lastIdx))
+	p := filepath.Join(dirpath, fmt.Sprintf("%d-%d-%d.log", firstIdx, lastIdx, logSize))
 
 	// LGX: modified LockFile flag parameters to evaluate O_SYNC implications
 	// on wal performance.
