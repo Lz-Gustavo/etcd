@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,7 +162,7 @@ func BenchmarkBatchTimerApproaches(b *testing.B) {
 		}
 	})
 
-	b.Run("Stop and Reset timer on each batch", func(b *testing.B) {
+	b.Run("stop and reset timer on each batch", func(b *testing.B) {
 		batchTimer := time.NewTimer(time.Second)
 		batchTimer.Stop()
 		mustResetTimer := true
@@ -183,6 +184,118 @@ func BenchmarkBatchTimerApproaches(b *testing.B) {
 			}
 			mustResetTimer = true
 		}
+	})
+}
+
+type _writerRequestOnTest struct {
+	persisted chan struct{}
+}
+
+func BenchmarkApplyCoordinationApproaches(b *testing.B) {
+	numRequests := 1000
+	numWriters := 4
+
+	applyDuration := time.Millisecond
+	persistenceDuration := 10 * time.Millisecond
+
+	b.Run("circular mutex array for writers", func(b *testing.B) {
+		b.StopTimer()
+
+		raftReady := make(chan raft.Ready)
+		go generateRaftReady(raftReady, numRequests)
+
+		mu := make([]*sync.Mutex, numWriters)
+		mu[0] = &sync.Mutex{}
+		for i := 1; i < numWriters; i++ {
+			mu[i] = &sync.Mutex{}
+			mu[i].Lock()
+		}
+
+		// spawn writer routines
+		writerChans := make([]chan *_writerRequestOnTest, numWriters)
+		for i := 0; i < numWriters; i++ {
+			writerChans[i] = make(chan *_writerRequestOnTest)
+			go func(idx int) {
+				for req := range writerChans[idx] {
+					// emulate a disk io
+					time.Sleep(persistenceDuration)
+
+					// wait to apply and emulate apply
+					mu[idx].Lock()
+					time.Sleep(applyDuration)
+					doNothing(req)
+
+					// signal applied req (circular manner)
+					next := modInt(idx-numWriters+1, numWriters)
+					mu[next].Unlock()
+				}
+			}(i)
+		}
+
+		// emulate raft execution
+		b.StartTimer()
+		count := 0
+		for range raftReady {
+			writerChans[count%numWriters] <- &_writerRequestOnTest{}
+			count++
+		}
+		b.StopTimer()
+
+		for i := 0; i < numWriters; i++ {
+			close(writerChans[i])
+		}
+	})
+
+	b.Run("sync channel on apply requests", func(b *testing.B) {
+		b.StopTimer()
+
+		raftReady := make(chan raft.Ready)
+		go generateRaftReady(raftReady, numRequests)
+
+		// spawn apply routine
+		applyChannel := make(chan *applyEntriesRequest)
+		go func(apChan chan *applyEntriesRequest) {
+			for ap := range apChan {
+				<-ap.persisted
+
+				// emulate apply
+				time.Sleep(applyDuration)
+				close(ap.persisted)
+			}
+		}(applyChannel)
+
+		// spawn writer routines
+		writerChans := make([]chan *_writerRequestOnTest, numWriters)
+		for i := 0; i < numWriters; i++ {
+			writerChans[i] = make(chan *_writerRequestOnTest)
+			go func(idx int) {
+				for req := range writerChans[idx] {
+					// emulate a disk io
+					time.Sleep(persistenceDuration)
+
+					// signal io persistence to apply
+					req.persisted <- struct{}{}
+				}
+			}(i)
+		}
+
+		// emulate raft execution
+		b.StartTimer()
+		count := 0
+		for range raftReady {
+			ch := make(chan struct{}, 1)
+			req := &_writerRequestOnTest{persisted: ch}
+
+			writerChans[count%numWriters] <- req
+			applyChannel <- &applyEntriesRequest{persisted: ch}
+			count++
+		}
+		b.StopTimer()
+
+		for i := 0; i < numWriters; i++ {
+			close(writerChans[i])
+		}
+		close(applyChannel)
 	})
 }
 
@@ -235,3 +348,5 @@ func generateRaftReady(rds chan<- raft.Ready, numRds int) {
 	}
 	close(rds)
 }
+
+func doNothing(req *_writerRequestOnTest) {}

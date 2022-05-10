@@ -46,7 +46,7 @@ const (
 	maxInflightMsgs = 4096 / 8
 
 	// LGX:
-	maxBatchFillTimeout = 500 * time.Millisecond
+	maxBatchFillTimeout = 300 * time.Millisecond
 )
 
 var (
