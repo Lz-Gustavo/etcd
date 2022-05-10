@@ -192,7 +192,7 @@ type _writerRequestOnTest struct {
 }
 
 func BenchmarkApplyCoordinationApproaches(b *testing.B) {
-	numRequests := 1000
+	numRequests := 100
 	numWriters := 4
 
 	applyDuration := time.Millisecond
@@ -214,7 +214,7 @@ func BenchmarkApplyCoordinationApproaches(b *testing.B) {
 		// spawn writer routines
 		writerChans := make([]chan *_writerRequestOnTest, numWriters)
 		for i := 0; i < numWriters; i++ {
-			writerChans[i] = make(chan *_writerRequestOnTest)
+			writerChans[i] = make(chan *_writerRequestOnTest, 1)
 			go func(idx int) {
 				for req := range writerChans[idx] {
 					// emulate a disk io
@@ -253,7 +253,7 @@ func BenchmarkApplyCoordinationApproaches(b *testing.B) {
 		go generateRaftReady(raftReady, numRequests)
 
 		// spawn apply routine
-		applyChannel := make(chan *applyEntriesRequest)
+		applyChannel := make(chan *applyEntriesRequest, numWriters)
 		go func(apChan chan *applyEntriesRequest) {
 			for ap := range apChan {
 				<-ap.persisted
@@ -267,7 +267,7 @@ func BenchmarkApplyCoordinationApproaches(b *testing.B) {
 		// spawn writer routines
 		writerChans := make([]chan *_writerRequestOnTest, numWriters)
 		for i := 0; i < numWriters; i++ {
-			writerChans[i] = make(chan *_writerRequestOnTest)
+			writerChans[i] = make(chan *_writerRequestOnTest, 1)
 			go func(idx int) {
 				for req := range writerChans[idx] {
 					// emulate a disk io
