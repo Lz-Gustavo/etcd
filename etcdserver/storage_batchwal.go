@@ -1,5 +1,13 @@
 package etcdserver
 
+// LGX: DEPRECATED
+// This Storage implementation is not utilized anymore while evaluating etcd's performance
+// with batch configuration on its standard logging approach. Current experiments regarding
+// SL batch configurations are done through the batch implementation defined on
+// etcdserver/raft.go/startBatchWAL(). This batchWALStorage used to be initilized on
+// etcdserver/server.go/NewServer() in case a BatchWAL logconfig ENV was set, and is deprecated
+// since commit https://github.com/Lz-Gustavo/etcd/commit/7e2425cd664d06957d0061c4ea3a17de30415a77.
+
 import (
 	"bytes"
 	"fmt"
@@ -10,8 +18,6 @@ import (
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
 )
-
-// LGX: describe this batch wal wrapper over the standard etcd wal
 
 const defaultBatchWALLatFile = "/tmp/bw-latency.out"
 

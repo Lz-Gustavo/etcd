@@ -1,7 +1,13 @@
 package etcdserver
 
-// LGX:
-//   TODO: describe this storage implementation...
+// LGX: DEPRECATED
+// This Storage implementation is not utilized anymore while evaluating etcd's performance
+// with beelog configuration. Current experiments regarding beelog are done through its
+// own implementation of the Raft handle function in etcdserver/raft.go/startBeelog(),
+// and by utilizing an internal implementation (i.e. instead of an external pkg) defined
+// on etcdserver/beelog.go. This beelogStorage used to be initilized on server.go/NewServer()
+// in case a Beelog logconfig ENV was set, and is deprecated since commit
+// https://github.com/Lz-Gustavo/etcd/commit/9e2e6773a57629e8a7a0d378e1fb7dfaba56786c.
 
 import (
 	"bytes"

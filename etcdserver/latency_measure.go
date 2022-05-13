@@ -1,5 +1,13 @@
 package etcdserver
 
+// LGX: DEPRECATED
+// Although still supported on the standard logging configuration, server-side latency
+// measurement for I/O calls is not utilized anymore while evaluating any aspect of etcd's
+// performance. As of commit https://github.com/Lz-Gustavo/etcd/commit/082638b73f06c463bbeb22a0c8827acb04de668e,
+// client-side latency measurement is utilized on every analysis conducted against this
+// prototype. Latency measurement usage can still be seen on etcdserver/raft.go/startStdWAL(),
+// and can be turned on for SL by setting isMeasuringLatency to true.
+
 import (
 	"bytes"
 	"log"
@@ -7,10 +15,6 @@ import (
 	"os"
 	"time"
 )
-
-// LGX:
-//   TODO: describe the idea behind server-side latency measure and why
-//   it will be implemented this way with global variables on the pkg scope
 
 const (
 	defaultLatencyFilename = "~/etcd-latency.out"
