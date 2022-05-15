@@ -187,6 +187,8 @@ func (r *raftNode) startStdWAL(rh *raftReadyHandler) {
 		case <-r.ticker.C:
 			r.tick()
 		case rd := <-r.Ready():
+			fmt.Println("new rd, state:", rd.HardState, "num commited entries:", len(rd.CommittedEntries), "num entries:", len(rd.Entries))
+
 			if rd.SoftState != nil {
 				newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 				if newLeader {
@@ -404,6 +406,12 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 		case <-batchTimer.C:
 			batchTimer.Stop()
 
+			// no updates on this batch, skip
+			if count == 0 {
+				mustResetBatchTimer = true
+				break
+			}
+
 			// must consume last notifyc var. Apply routine will later be freed by r.processRaftEntriesAfterSave()
 			// beelog.saveEntries()
 			<-*lastNotifyc
@@ -602,16 +610,19 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 		case <-batchTimer.C:
 			batchTimer.Stop()
 
+			// no updates on this batch, skip
+			if count == 0 {
+				mustResetBatchTimer = true
+				break
+			}
+
 			// must consume last notifyc var. Apply routine will later be freed by r.processRaftEntriesAfterSave()
 			// beelog.saveEntries()
 			<-*lastNotifyc
 
-			// must NOT log (*lastReady).Entries nor call r.raftStorage.Append(rd.Entries), since
-			// they were previously logged and appended before.
-			//
-			// Log(nil, true) simply locks the current table
+			// must NOT log (*lastReady).Entries nor call r.raftStorage.Append(rd.Entries), since they were
+			// previously logged and appended before. 'Log(nil, true)' simply locks the current table
 			bw.Log(nil, true)
-			lastIdx = (*lastReady).Entries[len((*lastReady).Entries)-1].Index
 			r.processRaftEntriesBeforeSave(islead, (*lastReady))
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
@@ -629,7 +640,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			// reset batch and keep underlying arrays
 			count = 0
-			firstIdx = 0
+			firstIdx, lastIdx = 0, 0
 			appliesBatch = appliesBatch[:0]
 			mustResetBatchTimer = true
 
@@ -704,8 +715,11 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				break
 			}
 
-			if len(rd.Entries) > 0 && firstIdx == 0 {
-				firstIdx = rd.Entries[0].Index
+			if len(rd.Entries) > 0 {
+				if firstIdx == 0 {
+					firstIdx = rd.Entries[0].Index
+				}
+				lastIdx = rd.Entries[len(rd.Entries)-1].Index
 			}
 			appliesBatch = append(appliesBatch, ap)
 			lastNotifyc = &notifyc
@@ -741,8 +755,6 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			if err := bw.Log(rd.Entries, true); err != nil {
 				log.Fatalln("failed on beelog.Log, err:", err)
 			}
-			lastIdx = rd.Entries[len(rd.Entries)-1].Index
-
 			r.processRaftEntriesBeforeSave(islead, rd)
 
 			// LGX: entries are appended BEFORE wal persistence on the beelog approach in order to
@@ -765,7 +777,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			// reset batch and keep underlying arrays
 			count = 0
-			firstIdx = 0
+			firstIdx, lastIdx = 0, 0
 			appliesBatch = appliesBatch[:0]
 			mustResetBatchTimer = true
 			r.Advance()
@@ -1073,6 +1085,7 @@ func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id
 	return id, n, s, w
 }
 
+// LGX: recovery procedure initiates here. Maybe implement a diff behavior based on logconfig ENV?
 func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
 	var walsnap walpb.Snapshot
 	if snapshot != nil {
