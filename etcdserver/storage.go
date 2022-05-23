@@ -116,6 +116,8 @@ func (st *storage) Release(snap raftpb.Snapshot) error {
 // readWAL reads the WAL at the given snap and returns the wal, its latest HardState and cluster ID, and all entries that appear
 // after the position of the given snap in the WAL.
 // The snap must have been previously saved to the WAL, or this call will panic.
+//
+// LGX: implement different recovery strategies, utilizing beelog wal.ReadAllBeelog() variant
 func readWAL(lg *zap.Logger, waldir string, snap walpb.Snapshot, unsafeNoFsync bool) (w *wal.WAL, id, cid types.ID, st raftpb.HardState, ents []raftpb.Entry) {
 	var (
 		err       error

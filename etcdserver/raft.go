@@ -187,8 +187,6 @@ func (r *raftNode) startStdWAL(rh *raftReadyHandler) {
 		case <-r.ticker.C:
 			r.tick()
 		case rd := <-r.Ready():
-			fmt.Println("new rd, state:", rd.HardState, "num commited entries:", len(rd.CommittedEntries), "num entries:", len(rd.Entries))
-
 			if rd.SoftState != nil {
 				newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 				if newLeader {
@@ -488,8 +486,10 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-			if mustIgnoreEntry {
+			hasFirstIgnoredEntries := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
+			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
+
+			if isRecoveredState || hasFirstIgnoredEntries {
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:
@@ -690,8 +690,10 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			mustIgnoreEntry := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-			if mustIgnoreEntry {
+			hasFirstIgnoredEntries := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
+			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
+
+			if isRecoveredState || hasFirstIgnoredEntries {
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:

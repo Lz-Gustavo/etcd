@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"go.etcd.io/etcd/pkg/fileutil"
+	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal/walpb"
 	"go.uber.org/zap"
 )
@@ -184,4 +185,10 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, l
 	// }
 
 	return w, nil
+}
+
+// LGX:
+// TODO: implement beelog variant based on wal.ReadAll()
+func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
+	return nil, raftpb.HardState{}, nil, nil
 }
