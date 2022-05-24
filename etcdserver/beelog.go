@@ -154,7 +154,11 @@ func (bw *BeelogWr) saveEntries(r *raftNode, rh *raftReadyHandler, dirpath strin
 		ents := bw.entries(req.cur)
 		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last, len(ents))
 		if err != nil {
-			r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
+			if r.lg != nil {
+				r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))
+			} else {
+				plog.Fatalf("failed creating new WAL for batch: %v", err)
+			}
 		}
 
 		if err := w.Save(req.rd.HardState, ents); err != nil {

@@ -303,6 +303,12 @@ type EtcdServer struct {
 func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	st := v2store.New(StoreClusterPrefix, StoreKeysPrefix)
 
+	// LGX:
+	parseLogConfigFromENV()
+	if logConfig == Beelog {
+		parseBeelogRecovConfigFromEnv()
+	}
+
 	var (
 		w  *wal.WAL
 		n  raft.Node
@@ -552,7 +558,6 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 
 	// LGX:
-	parseLogConfigFromENV()
 	switch logConfig {
 	case NotWAL:
 		nodeCfg.storage = NewNotWALStorage()
@@ -565,7 +570,6 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		nodeCfg.storage = NewStorage(w, ss)
 
 	case Beelog:
-		parseBeelogRecovConfigFromEnv()
 		//nodeCfg.storage = NewBeelogStorage()
 		nodeCfg.storage = NewStorage(w, ss)
 

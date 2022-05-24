@@ -197,11 +197,16 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 
 // LGX: variant from Open(), openAtIndex() and selectWALFiles(). Open as ReadOnly, always starting
 // on index 1.
-func OpenBeelog(lg *zap.Logger, dirpath string) (*WAL, error) {
-	names, err := readWALNames(lg, dirpath)
+func OpenBeelog(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, error) {
+
+	// TODO: verify sort on this procedure. Are beelog files really returned in ascending order by
+	// log intervals?
+	names, err := fileutil.ReadDir(dirpath)
 	if err != nil {
 		return nil, err
 	}
+
+	// NOTE: do we need to check for WAL name format as etcd does?
 
 	rs, ls, closer, err := openWALFiles(lg, dirpath, names, 1, false)
 	if err != nil {
@@ -211,7 +216,7 @@ func OpenBeelog(lg *zap.Logger, dirpath string) (*WAL, error) {
 	w := &WAL{
 		lg:        lg,
 		dir:       dirpath,
-		start:     walpb.Snapshot{},
+		start:     snap,
 		decoder:   newDecoder(rs...),
 		readClose: closer,
 		locks:     ls,

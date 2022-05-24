@@ -1093,7 +1093,23 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
 	}
-	w, id, cid, st, ents := readWAL(cfg.Logger, cfg.WALDir(), walsnap, cfg.UnsafeNoFsync)
+
+	var (
+		w       *wal.WAL
+		id, cid types.ID
+		st      raftpb.HardState
+		ents    []raftpb.Entry
+	)
+
+	// TODO: remove print statements
+	if logConfig == Beelog {
+		fmt.Println("starting beelog recov")
+		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, beelogDir, walsnap)
+
+	} else {
+		fmt.Println("starting standard recovery")
+		w, id, cid, st, ents = readWAL(cfg.Logger, cfg.WALDir(), walsnap, cfg.UnsafeNoFsync)
+	}
 
 	if cfg.Logger != nil {
 		cfg.Logger.Info(
