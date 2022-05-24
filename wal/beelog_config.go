@@ -188,7 +188,33 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, l
 }
 
 // LGX:
-// TODO: implement beelog variant based on wal.ReadAll()
+// TODO: maybe implement beelog variant based on wal.ReadAll()?
+// ReadAll would still be compatible, but this variant could be less expensive since
+// WAL is split on different files (e.g. different lock strategy)
 func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
 	return nil, raftpb.HardState{}, nil, nil
+}
+
+// LGX: variant from Open(), openAtIndex() and selectWALFiles(). Open as ReadOnly, always starting
+// on index 1.
+func OpenBeelog(lg *zap.Logger, dirpath string) (*WAL, error) {
+	names, err := readWALNames(lg, dirpath)
+	if err != nil {
+		return nil, err
+	}
+
+	rs, ls, closer, err := openWALFiles(lg, dirpath, names, 1, false)
+	if err != nil {
+		return nil, err
+	}
+
+	w := &WAL{
+		lg:        lg,
+		dir:       dirpath,
+		start:     walpb.Snapshot{},
+		decoder:   newDecoder(rs...),
+		readClose: closer,
+		locks:     ls,
+	}
+	return w, nil
 }

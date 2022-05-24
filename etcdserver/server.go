@@ -565,6 +565,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		nodeCfg.storage = NewStorage(w, ss)
 
 	case Beelog:
+		parseBeelogRecovConfigFromEnv()
 		//nodeCfg.storage = NewBeelogStorage()
 		nodeCfg.storage = NewStorage(w, ss)
 
