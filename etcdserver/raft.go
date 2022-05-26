@@ -101,6 +101,9 @@ type raftNode struct {
 
 	stopped chan struct{}
 	done    chan struct{}
+
+	// LGX:
+	lastStableMetada []byte
 }
 
 type raftNodeConfig struct {
@@ -627,8 +630,9 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
 			req := &beelogSaveRequest{
-				first: firstIdx,
-				last:  lastIdx,
+				first:    firstIdx,
+				last:     lastIdx,
+				metadata: r.lastStableMetada,
 
 				rd:      *lastReady,
 				islead:  islead,
@@ -766,8 +770,9 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 
 			cpyApplies := append(make([]apply, 0, len(appliesBatch)), appliesBatch...)
 			req := &beelogSaveRequest{
-				first: firstIdx,
-				last:  lastIdx,
+				first:    firstIdx,
+				last:     lastIdx,
+				metadata: r.lastStableMetada,
 
 				rd:      rd,
 				islead:  islead,
@@ -1133,7 +1138,14 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 		s.ApplySnapshot(*snapshot)
 	}
 	s.SetHardState(st)
-	s.Append(ents)
+
+	if logConfig == Beelog {
+		s.AppendBeelogEntries(ents)
+
+	} else {
+		s.Append(ents)
+	}
+
 	c := &raft.Config{
 		ID:              uint64(id),
 		ElectionTick:    cfg.ElectionTicks,

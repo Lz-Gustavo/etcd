@@ -98,9 +98,10 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 // beelogSaveRequest represents an executed raft state, storing all the necessary
 // information for a concurrent routine can assync. persist that state on stable storage.
 type beelogSaveRequest struct {
-	cur   int
-	first uint64
-	last  uint64
+	cur      int
+	first    uint64
+	last     uint64
+	metadata []byte
 
 	rd        raft.Ready
 	islead    bool
@@ -152,7 +153,7 @@ func (bw *BeelogWr) entries(cur int) []raftpb.Entry {
 func (bw *BeelogWr) saveEntries(r *raftNode, rh *raftReadyHandler, dirpath string, reqs <-chan *beelogSaveRequest) {
 	for req := range reqs {
 		ents := bw.entries(req.cur)
-		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.first, req.last, len(ents))
+		w, err := wal.CreateBeelogWAL(r.lg, dirpath, req.metadata, req.first, req.last, len(ents))
 		if err != nil {
 			if r.lg != nil {
 				r.lg.Fatal("failed creating new WAL for batch", zap.Error(err))

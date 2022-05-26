@@ -578,6 +578,9 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 	srv.r = *newRaftNode(nodeCfg)
 
+	// LGX: saving initial cluster metadata
+	srv.r.lastStableMetada = getNodeMetadata(cfg, cl)
+
 	serverID.With(prometheus.Labels{"server_id": id.String()}).Set(1)
 
 	srv.applyV2 = &applierV2store{store: srv.v2store, cluster: srv.cluster}
@@ -2812,4 +2815,15 @@ func (s *EtcdServer) IsMemberExist(id types.ID) bool {
 // raftStatus returns the raft status of this etcd node.
 func (s *EtcdServer) raftStatus() raft.Status {
 	return s.r.Node.Status()
+}
+
+// LGX: helper function to extracted initial cluster config and save on WAL files
+func getNodeMetadata(cfg ServerConfig, cl *membership.RaftCluster) []byte {
+	member := cl.MemberByName(cfg.Name)
+	return pbutil.MustMarshal(
+		&pb.Metadata{
+			NodeID:    uint64(member.ID),
+			ClusterID: uint64(cl.ID()),
+		},
+	)
 }

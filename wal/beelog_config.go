@@ -33,12 +33,8 @@ func init() {
 //   * WALs are named after the paremeters 'firstIdx' and 'lastIdx' informed,
 //     and with .log extension
 //   * there can be multiple WALs on the same dirpath
-//   * an empty metadata is always used
 //   * a temporary dir, the later rename to the actual filepath, and fsync calls were removed.
-func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, logSize int) (*WAL, error) {
-	// utilizing an always empty metadata for beelog WAL
-	metadata := []byte{}
-
+func CreateBeelogWAL(lg *zap.Logger, dirpath string, metadata []byte, firstIdx, lastIdx uint64, logSize int) (*WAL, error) {
 	// LGX: removed temporary dir creation here
 
 	p := filepath.Join(dirpath, fmt.Sprintf("%d-%d-%d.log", firstIdx, lastIdx, logSize))

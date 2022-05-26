@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/pkg/pbutil"
 	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
@@ -63,13 +65,14 @@ func naiveRecovery(lg *zap.Logger, waldir string, snap walpb.Snapshot) (*wal.WAL
 		FatalIfLog(lg, "failed to open WAL", err)
 	}
 
-	_, st, ents, err := w.ReadAllBeelog()
+	wmetadata, st, ents, err := w.ReadAllBeelog()
 	if err != nil {
 		FatalIfLog(lg, "error on reading beelog WAL:", err)
 	}
 
-	// TODO: check metadata and return proper ids?
-	return w, 0, 0, st, ents
+	var metadata pb.Metadata
+	pbutil.MustUnmarshal(&metadata, wmetadata)
+	return w, types.ID(metadata.NodeID), types.ID(metadata.ClusterID), st, ents
 }
 
 func readBeelogFileNamesOnDir(lg *zap.Logger, waldir string) ([]string, error) {
