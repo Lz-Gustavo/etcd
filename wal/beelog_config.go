@@ -127,7 +127,7 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 	}
 	decoder := w.decoder
 
-	for err = decoder.decode(rec); err == nil; err = decoder.decode(rec) {
+	for err = decoder.decodeBeelog(rec); err == nil; err = decoder.decodeBeelog(rec) {
 		switch rec.Type {
 		case entryType:
 			e := mustUnmarshalEntry(rec.Data)
@@ -177,8 +177,60 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 	w.metadata = metadata
 	w.decoder = nil
 
-	if err == ErrCRCMismatch || err == walpb.ErrCRCMismatch {
+	if err == ErrCRCMismatch || err == walpb.ErrCRCMismatch || err == io.EOF {
 		err = nil
 	}
 	return metadata, state, ents, err
+}
+
+// LGX: variant from wal.decode
+func (d *decoder) decodeBeelog(rec *walpb.Record) error {
+	rec.Reset()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(d.brs) == 0 {
+		return io.EOF
+	}
+
+	l, err := readInt64(d.brs[0])
+	if err == io.EOF || (err == nil && l == 0) {
+		// hit end of file or preallocated space
+		d.brs = d.brs[1:]
+		if len(d.brs) == 0 {
+			return io.EOF
+		}
+		d.lastValidOff = 0
+		return d.decodeRecord(rec)
+	}
+	if err != nil {
+		return err
+	}
+
+	recBytes, padBytes := decodeFrameSize(l)
+	if recBytes >= maxWALEntrySizeLimit-padBytes {
+		return ErrMaxWALEntrySizeLimitExceeded
+	}
+
+	data := make([]byte, recBytes+padBytes)
+	if _, err = io.ReadFull(d.brs[0], data); err != nil {
+		// ReadFull returns io.EOF only if no bytes were read
+		// the decoder should treat this as an ErrUnexpectedEOF instead.
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	if err := rec.Unmarshal(data[:recBytes]); err != nil {
+		if d.isTornEntry(data) {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+
+	// LGX: removed crc validation here
+
+	// record decoded as valid; point last valid offset to end of record
+	d.lastValidOff += frameSizeBytes + recBytes + padBytes
+	return nil
 }
