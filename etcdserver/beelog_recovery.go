@@ -3,6 +3,7 @@ package etcdserver
 import (
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -46,30 +47,61 @@ func BeelogRecovery(lg *zap.Logger, waldir string, snap walpb.Snapshot) (*wal.WA
 		return naiveRecovery(lg, waldir, snap)
 
 	default:
-		if lg != nil {
-			lg.Fatal("unknow beelog recovery config")
-		} else {
-			plog.Fatalf("unknow beelog recovery config")
-		}
+		FatalIfLog(lg, "unknow beelog recovery config", nil)
 	}
 	return nil, 0, 0, raftpb.HardState{}, nil
 }
 
 func naiveRecovery(lg *zap.Logger, waldir string, snap walpb.Snapshot) (*wal.WAL, types.ID, types.ID, raftpb.HardState, []raftpb.Entry) {
-	w, err := wal.OpenBeelog(lg, waldir, snap)
+	names, err := readBeelogFileNamesOnDir(lg, waldir)
 	if err != nil {
-		if lg != nil {
-			lg.Fatal("failed to open WAL", zap.Error(err))
-		} else {
-			plog.Fatalf("open wal error: %v", err)
-		}
+		FatalIfLog(lg, "failed reading beelog wal names", err)
 	}
 
-	_, st, ents, err := w.ReadAll()
+	w, err := wal.OpenBeelog(lg, waldir, names, snap)
 	if err != nil {
-		lg.Fatal("error on reading beelog WAL:", zap.Error(err))
+		FatalIfLog(lg, "failed to open WAL", err)
 	}
 
-	// TODO: check metadata and return proper ids
+	_, st, ents, err := w.ReadAllBeelog()
+	if err != nil {
+		FatalIfLog(lg, "error on reading beelog WAL:", err)
+	}
+
+	// TODO: check metadata and return proper ids?
 	return w, 0, 0, st, ents
+}
+
+func readBeelogFileNamesOnDir(lg *zap.Logger, waldir string) ([]string, error) {
+	dir, err := os.Open(waldir)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Sort(SortByWALName(names))
+	return names, nil
+}
+
+func FatalIfLog(lg *zap.Logger, msg string, err error) {
+	if lg != nil {
+		lg.Fatal(msg, zap.Error(err))
+	} else {
+		plog.Fatalf("%s: %v", msg, err)
+	}
+}
+
+type SortByWALName []string
+
+func (a SortByWALName) Len() int      { return len(a) }
+func (a SortByWALName) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a SortByWALName) Less(i, j int) bool {
+	idxI, _ := strconv.Atoi(strings.Split(a[i], "-")[0])
+	idxJ, _ := strconv.Atoi(strings.Split(a[j], "-")[0])
+	return idxI < idxJ
 }

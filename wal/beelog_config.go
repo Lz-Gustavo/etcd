@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 
 	"go.etcd.io/etcd/pkg/fileutil"
+	"go.etcd.io/etcd/pkg/pbutil"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal/walpb"
 	"go.uber.org/zap"
@@ -32,31 +34,12 @@ func init() {
 //     and with .log extension
 //   * there can be multiple WALs on the same dirpath
 //   * an empty metadata is always used
-//   * a temporary dir, and a later rename to the actual filepath, are not done.
-//     (the previous instructions for this procedure are intentionally left commented for now)
+//   * a temporary dir, the later rename to the actual filepath, and fsync calls were removed.
 func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, logSize int) (*WAL, error) {
 	// utilizing an always empty metadata for beelog WAL
 	metadata := []byte{}
 
-	// keep temporary wal directory so WAL initialization appears atomic
-	// tmpdirpath := filepath.Clean(dirpath) + ".tmp"
-	// if fileutil.Exist(tmpdirpath) {
-	// 	if err := os.RemoveAll(tmpdirpath); err != nil {
-	// 		return nil, err
-	// 	}
-	// }
-
-	// if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
-	// 	if lg != nil {
-	// 		lg.Warn(
-	// 			"failed to create a temporary WAL directory",
-	// 			zap.String("tmp-dir-path", tmpdirpath),
-	// 			zap.String("dir-path", dirpath),
-	// 			zap.Error(err),
-	// 		)
-	// 	}
-	// 	return nil, err
-	// }
+	// LGX: removed temporary dir creation here
 
 	p := filepath.Join(dirpath, fmt.Sprintf("%d-%d-%d.log", firstIdx, lastIdx, logSize))
 
@@ -88,17 +71,8 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, l
 		}
 		return nil, err
 	}
-	// if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
-	// 	if lg != nil {
-	// 		lg.Warn(
-	// 			"failed to preallocate an initial WAL file",
-	// 			zap.String("path", p),
-	// 			zap.Int64("segment-bytes", SegmentSizeBytes),
-	// 			zap.Error(err),
-	// 		)
-	// 	}
-	// 	return nil, err
-	// }
+
+	// LGX: removed WAL file preallocation here
 
 	w := &WAL{
 		lg:       lg,
@@ -117,97 +91,14 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, firstIdx, lastIdx uint64, l
 		return nil, err
 	}
 
-	// NOTE: why saving an empty Snapshot? maybe propose a PR avoiding this
-	// cost on oficial etcd
-	//
-	// if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
-	// 	return nil, err
-	// }
-
-	// if w, err = w.renameWAL(tmpdirpath); err != nil {
-	// 	if lg != nil {
-	// 		lg.Warn(
-	// 			"failed to rename the temporary WAL directory",
-	// 			zap.String("tmp-dir-path", tmpdirpath),
-	// 			zap.String("dir-path", w.dir),
-	// 			zap.Error(err),
-	// 		)
-	// 	}
-	// 	return nil, err
-	// }
-
-	// LGX: also comment Fsync procedures, since WALs are not renamed
-	//
-	// var perr error
-	// defer func() {
-	// 	if perr != nil {
-	// 		w.cleanupWAL(lg)
-	// 	}
-	// }()
-
-	// // directory was renamed; sync parent dir to persist rename
-	// pdir, perr := fileutil.OpenDir(filepath.Dir(w.dir))
-	// if perr != nil {
-	// 	if lg != nil {
-	// 		lg.Warn(
-	// 			"failed to open the parent data directory",
-	// 			zap.String("parent-dir-path", filepath.Dir(w.dir)),
-	// 			zap.String("dir-path", w.dir),
-	// 			zap.Error(perr),
-	// 		)
-	// 	}
-	// 	return nil, perr
-	// }
-	// start := time.Now()
-	// if perr = fileutil.Fsync(pdir); perr != nil {
-	// 	if lg != nil {
-	// 		lg.Warn(
-	// 			"failed to fsync the parent data directory file",
-	// 			zap.String("parent-dir-path", filepath.Dir(w.dir)),
-	// 			zap.String("dir-path", w.dir),
-	// 			zap.Error(perr),
-	// 		)
-	// 	}
-	// 	return nil, perr
-	// }
-	// walFsyncSec.Observe(time.Since(start).Seconds())
-
-	// if perr = pdir.Close(); perr != nil {
-	// 	if lg != nil {
-	// 		lg.Warn(
-	// 			"failed to close the parent data directory file",
-	// 			zap.String("parent-dir-path", filepath.Dir(w.dir)),
-	// 			zap.String("dir-path", w.dir),
-	// 			zap.Error(perr),
-	// 		)
-	// 	}
-	// 	return nil, perr
-	// }
-
+	// LGX: removed empty snapshot save, dir rename, and fsync calls here
 	return w, nil
-}
-
-// LGX:
-// TODO: maybe implement beelog variant based on wal.ReadAll()?
-// ReadAll would still be compatible, but this variant could be less expensive since
-// WAL is split on different files (e.g. different lock strategy)
-func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
-	return nil, raftpb.HardState{}, nil, nil
 }
 
 // LGX: variant from Open(), openAtIndex() and selectWALFiles(). Open as ReadOnly, always starting
 // on index 1.
-func OpenBeelog(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, error) {
-
-	// TODO: verify sort on this procedure. Are beelog files really returned in ascending order by
-	// log intervals?
-	names, err := fileutil.ReadDir(dirpath)
-	if err != nil {
-		return nil, err
-	}
-
+func OpenBeelog(lg *zap.Logger, dirpath string, names []string, snap walpb.Snapshot) (*WAL, error) {
 	// NOTE: do we need to check for WAL name format as etcd does?
-
 	rs, ls, closer, err := openWALFiles(lg, dirpath, names, 1, false)
 	if err != nil {
 		return nil, err
@@ -222,4 +113,72 @@ func OpenBeelog(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, erro
 		locks:     ls,
 	}
 	return w, nil
+}
+
+// LGX: ReadAllBeelog() is a variant of ReadAll()
+func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	rec := &walpb.Record{}
+
+	if w.decoder == nil {
+		return nil, state, nil, ErrDecoderNotFound
+	}
+	decoder := w.decoder
+
+	for err = decoder.decode(rec); err == nil; err = decoder.decode(rec) {
+		switch rec.Type {
+		case entryType:
+			e := mustUnmarshalEntry(rec.Data)
+
+			// LGX: removed index verification assuming WAls are read in ascending order
+			ents = append(ents, e)
+			w.enti = e.Index
+
+		case stateType:
+			state = mustUnmarshalState(rec.Data)
+
+		case metadataType:
+			if metadata != nil && !bytes.Equal(metadata, rec.Data) {
+				state.Reset()
+				return nil, state, nil, ErrMetadataConflict
+			}
+			metadata = rec.Data
+
+		case crcType:
+			// LGX: removed crcType verification
+
+		case snapshotType:
+			var snap walpb.Snapshot
+			pbutil.MustUnmarshal(&snap, rec.Data)
+			if snap.Index == w.start.Index {
+				if snap.Term != w.start.Term {
+					state.Reset()
+					return nil, state, nil, ErrSnapshotMismatch
+				}
+			}
+
+		default:
+			state.Reset()
+			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
+		}
+	}
+
+	// LGX: removed tail() invocation and match variable
+
+	// close decoder, disable reading
+	if w.readClose != nil {
+		w.readClose()
+		w.readClose = nil
+	}
+
+	w.start = walpb.Snapshot{}
+	w.metadata = metadata
+	w.decoder = nil
+
+	if err == ErrCRCMismatch || err == walpb.ErrCRCMismatch {
+		err = nil
+	}
+	return metadata, state, ents, err
 }

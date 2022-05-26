@@ -1106,6 +1106,11 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 		fmt.Println("starting beelog recov")
 		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, beelogDir, walsnap)
 
+		// TODO: investigate recovery with the minimal entries
+		fmt.Println("finished beelog recov!")
+		fmt.Println("STATE:", st)
+		fmt.Println("NUM ENTRIES:", len(ents))
+
 	} else {
 		fmt.Println("starting standard recovery")
 		w, id, cid, st, ents = readWAL(cfg.Logger, cfg.WALDir(), walsnap, cfg.UnsafeNoFsync)
