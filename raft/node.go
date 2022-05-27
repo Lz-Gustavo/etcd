@@ -551,10 +551,18 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 }
 
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
-	// LGX: study raftlog.nextEnts()
+	// LGX:
+	// TODO: describe this change
+	var ents []pb.Entry
+	if BeelogEnabled {
+		ents = r.raftLog.nextEntsBeelog()
+	} else {
+		ents = r.raftLog.nextEnts()
+	}
+
 	rd := Ready{
 		Entries:          r.raftLog.unstableEntries(),
-		CommittedEntries: r.raftLog.nextEnts(),
+		CommittedEntries: ents,
 		Messages:         r.msgs,
 	}
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {

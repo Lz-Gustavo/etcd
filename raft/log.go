@@ -66,7 +66,17 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}
-	lastIndex, err := storage.LastIndex()
+
+	// LGX:
+	// TODO: describe this change
+	var lastIndex uint64
+	if BeelogEnabled {
+		lastIndex, err = storage.LastIndexBeelog()
+
+	} else {
+		lastIndex, err = storage.LastIndex()
+	}
+
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}

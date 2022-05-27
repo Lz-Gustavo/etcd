@@ -70,6 +70,16 @@ func naiveRecovery(lg *zap.Logger, waldir string, snap walpb.Snapshot) (*wal.WAL
 		FatalIfLog(lg, "error on reading beelog WAL:", err)
 	}
 
+	if len(ents) > 0 && ents[len(ents)-1].Index != st.Commit {
+		// add an empty entry with the index matching the last commit
+		ents = append(ents, raftpb.Entry{
+			Term:  st.Term,
+			Type:  raftpb.EntryNormal,
+			Index: st.Commit,
+			Data:  []byte{},
+		})
+	}
+
 	var metadata pb.Metadata
 	pbutil.MustUnmarshal(&metadata, wmetadata)
 	return w, types.ID(metadata.NodeID), types.ID(metadata.ClusterID), st, ents

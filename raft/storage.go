@@ -69,6 +69,9 @@ type Storage interface {
 	// so raft state machine could know that Storage needs some time to prepare
 	// snapshot and call Snapshot later.
 	Snapshot() (pb.Snapshot, error)
+
+	// LGX: LastIndex returns the index of the last entry in the log in case of beelog config.
+	LastIndexBeelog() (uint64, error)
 }
 
 // MemoryStorage implements the Storage interface backed by an
@@ -145,6 +148,13 @@ func (ms *MemoryStorage) LastIndex() (uint64, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	return ms.lastIndex(), nil
+}
+
+// LGX: describe this procedure
+func (ms *MemoryStorage) LastIndexBeelog() (uint64, error) {
+	ms.Lock()
+	defer ms.Unlock()
+	return ms.ents[len(ms.ents)-1].Index, nil
 }
 
 func (ms *MemoryStorage) lastIndex() uint64 {

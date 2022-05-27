@@ -579,7 +579,7 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	srv.r = *newRaftNode(nodeCfg)
 
 	// LGX: saving initial cluster metadata
-	srv.r.lastStableMetada = getNodeMetadata(cfg, cl)
+	srv.r.lastStableMetada = getNodeMetadata(uint64(id), uint64(cl.ID()))
 
 	serverID.With(prometheus.Labels{"server_id": id.String()}).Set(1)
 
@@ -1231,7 +1231,13 @@ func (s *EtcdServer) run() {
 
 func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
 	s.applySnapshot(ep, apply)
-	s.applyEntries(ep, apply)
+
+	// LGX:
+	if logConfig == Beelog {
+		s.applyEntriesBeelog(ep, apply)
+	} else {
+		s.applyEntries(ep, apply)
+	}
 
 	proposalsApplied.Set(float64(ep.appliedi))
 	s.applyWait.Trigger(ep.appliedi)
@@ -1512,6 +1518,22 @@ func (s *EtcdServer) applyEntries(ep *etcdProgress, apply *apply) {
 		// 10*time.Second? Or parse from a constant maybe?
 		//
 		//   TODO: send a PR fixing this...
+		go s.stopWithDelay(10*100*time.Millisecond, fmt.Errorf("the member has been permanently removed from the cluster"))
+	}
+}
+
+// LGX: very much similar to applyEntries(), with the difference that it doesnt verifies entry
+// indexes before applying
+func (s *EtcdServer) applyEntriesBeelog(ep *etcdProgress, apply *apply) {
+	if len(apply.entries) == 0 {
+		return
+	}
+
+	// removed all index verification procedures here
+	ents := apply.entries
+
+	var shouldstop bool
+	if ep.appliedt, ep.appliedi, shouldstop = s.apply(ents, &ep.confState); shouldstop {
 		go s.stopWithDelay(10*100*time.Millisecond, fmt.Errorf("the member has been permanently removed from the cluster"))
 	}
 }
@@ -2818,12 +2840,11 @@ func (s *EtcdServer) raftStatus() raft.Status {
 }
 
 // LGX: helper function to extracted initial cluster config and save on WAL files
-func getNodeMetadata(cfg ServerConfig, cl *membership.RaftCluster) []byte {
-	member := cl.MemberByName(cfg.Name)
+func getNodeMetadata(id, cid uint64) []byte {
 	return pbutil.MustMarshal(
 		&pb.Metadata{
-			NodeID:    uint64(member.ID),
-			ClusterID: uint64(cl.ID()),
+			NodeID:    id,
+			ClusterID: cid,
 		},
 	)
 }
