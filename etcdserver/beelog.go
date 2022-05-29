@@ -17,10 +17,13 @@ import (
 	"go.uber.org/zap"
 )
 
+var ErrUnknowBeelogOp = errors.New("unknow operation informed for beelog")
+
 type StateTable map[int64]raftpb.Entry
 
 type BeelogWr struct {
 	state     []StateTable
+	conf      [][]raftpb.Entry
 	mu        []*sync.Mutex
 	cur       int
 	numTables int
@@ -40,19 +43,22 @@ func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, r
 		return nil
 	}
 
-	s := make([]StateTable, numTables)
-	m := make([]*sync.Mutex, numTables)
+	st := make([]StateTable, numTables)
+	cf := make([][]raftpb.Entry, numTables)
+	mu := make([]*sync.Mutex, numTables)
 
 	for i := 0; i < numTables; i++ {
-		s[i] = make(StateTable)
-		m[i] = &sync.Mutex{}
+		st[i] = make(StateTable)
+		cf[i] = make([]raftpb.Entry, 0)
+		mu[i] = &sync.Mutex{}
 	}
 
 	wrs := make([]chan *beelogSaveRequest, numTables)
 	wrs[0] = make(chan *beelogSaveRequest, 1)
 	bw := &BeelogWr{
-		state:     s,
-		mu:        m,
+		state:     st,
+		conf:      cf,
+		mu:        mu,
 		numTables: numTables,
 
 		isParallelIO: isParallelIO,
@@ -82,7 +88,11 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 
 	for _, ent := range ents {
 		k, err := getKeyFromRaftEntry(ent)
-		if err != nil {
+		if errors.Is(err, ErrUnknowBeelogOp) {
+			bw.conf[cur] = append(bw.conf[cur], ent)
+			continue
+
+		} else if err != nil {
 			bw.mu[cur].Unlock()
 			return err
 		}
@@ -134,15 +144,16 @@ func (bw *BeelogWr) FilledBatch(req *beelogSaveRequest, applies []apply) {
 	bw.writers[req.cur] <- req
 }
 
-// entries reads the table state identified by 'cur', returning a compacted slice of
-// its entries and allowing it to receive new ones.
+// entries reads the current unknow entries stored and the table state identified by 'cur',
+// returning a compacted slice of its entries and allowing it to receive new ones.
 func (bw *BeelogWr) entries(cur int) []raftpb.Entry {
-	ents := make([]raftpb.Entry, 0, len(bw.state[cur]))
+	ents := append(make([]raftpb.Entry, 0, len(bw.conf[cur])+len(bw.state[cur])), bw.conf[cur]...)
 	for _, ent := range bw.state[cur] {
 		ents = append(ents, ent)
 	}
 
 	bw.state[cur] = make(StateTable)
+	bw.conf[cur] = make([]raftpb.Entry, 0)
 	bw.mu[cur].Unlock()
 	return ents
 }
@@ -171,13 +182,13 @@ func (bw *BeelogWr) saveEntries(r *raftNode, rh *raftReadyHandler, dirpath strin
 		}
 		w.Close()
 
+		req.persisted <- struct{}{}
+
 		// for now, r.storage is utilized within processRaftEntriesAfterSave instead of
 		// the actual WAL utilized for that batch. Since storage is utilized only within
 		// snapshot procedures, and we completely disabled snapshots for our approach,
 		// maybe theres no need to worry about that :)
 		r.processRaftEntriesAfterSave(req.islead, req.rd, req.notifyc)
-
-		req.persisted <- struct{}{}
 	}
 }
 
@@ -228,16 +239,16 @@ func modInt(a, b int) int {
 // unmarshal the entire structure since we only need the operation key
 func getKeyFromRaftEntry(ent raftpb.Entry) (int64, error) {
 	if ent.Type != raftpb.EntryNormal {
-		return 0, errors.New("requested entry is not from EntryNormal type")
+		return 0, ErrUnknowBeelogOp
 	}
 
 	raftReq := &pb.InternalRaftRequest{}
 	if err := raftReq.Unmarshal(ent.Data); err != nil {
-		return 0, err
+		return 0, ErrUnknowBeelogOp
 	}
 
 	if raftReq.Put == nil && raftReq.Range == nil {
-		return 0, errors.New("requested entry is not a Put nor Range operation")
+		return 0, ErrUnknowBeelogOp
 	}
 
 	var rd *bytes.Reader

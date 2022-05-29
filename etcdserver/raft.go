@@ -383,7 +383,7 @@ func (r *raftNode) startStdWAL(rh *raftReadyHandler) {
 // TODO: describe and add ad-hoc latency measurement
 func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 	internalTimeoutOnReads := 5 * time.Second
-	ignoreIndex := uint64(4)
+	batchSkipIndex := uint64(4)
 
 	defer r.onStop()
 	islead := false
@@ -489,10 +489,10 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			hasFirstIgnoredEntries := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
+			mustSkipBatching := len(rd.Entries) > 0 && rd.Entries[0].Index <= batchSkipIndex
 			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
 
-			if isRecoveredState || hasFirstIgnoredEntries {
+			if isRecoveredState || mustSkipBatching {
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:
@@ -584,7 +584,7 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 // processing new raft.Ready's
 func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	internalTimeoutOnReads := 5 * time.Second
-	ignoreIndex := uint64(4)
+	batchSkipIndex := uint64(4)
 
 	defer r.onStop()
 	islead := false
@@ -694,10 +694,31 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			hasFirstIgnoredEntries := len(rd.Entries) > 0 && rd.Entries[0].Index <= ignoreIndex
-			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
+			mustSkipBatching := len(rd.Entries) > 0 && rd.Entries[0].Index <= batchSkipIndex
+			if mustSkipBatching {
+				if err := bw.Log(rd.Entries, true); err != nil {
+					log.Fatalln("failed on beelog.Log, err:", err)
+				}
+				r.processRaftEntriesBeforeSave(islead, rd)
+				r.raftStorage.Append(rd.Entries)
 
-			if isRecoveredState || hasFirstIgnoredEntries {
+				req := &beelogSaveRequest{
+					first:    rd.Entries[0].Index,
+					last:     rd.Entries[len(rd.Entries)-1].Index,
+					metadata: r.lastStableMetada,
+
+					rd:      rd,
+					islead:  islead,
+					notifyc: notifyc,
+				}
+
+				bw.FilledBatch(req, []apply{ap})
+				r.Advance()
+				break
+			}
+
+			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
+			if isRecoveredState {
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:
@@ -706,14 +727,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				}
 
 				r.processRaftEntriesBeforeSave(islead, rd)
-				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
-					if r.lg != nil {
-						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
-					} else {
-						plog.Fatalf("failed to save state and entries error: %v", err)
-					}
-				}
-
+				// theres no need to Save() recovered state...
 				r.raftStorage.Append(rd.Entries)
 				r.processRaftEntriesAfterSave(islead, rd, notifyc)
 

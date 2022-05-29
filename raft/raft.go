@@ -1575,8 +1575,11 @@ func (r *raft) switchToConfig(cfg tracker.Config, prs tracker.ProgressMap) pb.Co
 }
 
 func (r *raft) loadState(state pb.HardState) {
-	if state.Commit < r.raftLog.committed || state.Commit > r.raftLog.lastIndex() {
-		r.logger.Panicf("%x state.commit %d is out of range [%d, %d]", r.id, state.Commit, r.raftLog.committed, r.raftLog.lastIndex())
+	// LGX: must ignore this kind of verification in order to load beelog compacted state
+	if !BeelogEnabled {
+		if state.Commit < r.raftLog.committed || state.Commit > r.raftLog.lastIndex() {
+			r.logger.Panicf("%x state.commit %d is out of range [%d, %d]", r.id, state.Commit, r.raftLog.committed, r.raftLog.lastIndex())
+		}
 	}
 	r.raftLog.committed = state.Commit
 	r.Term = state.Term
