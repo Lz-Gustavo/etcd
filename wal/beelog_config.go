@@ -95,7 +95,7 @@ func CreateBeelogWAL(lg *zap.Logger, dirpath string, metadata []byte, firstIdx, 
 // on index 1.
 func OpenBeelog(lg *zap.Logger, dirpath string, names []string, snap walpb.Snapshot) (*WAL, error) {
 	// NOTE: do we need to check for WAL name format as etcd does?
-	rs, ls, closer, err := openWALFiles(lg, dirpath, names, 1, false)
+	rs, ls, closer, err := openWALFiles(lg, dirpath, names, 0, false)
 	if err != nil {
 		return nil, err
 	}

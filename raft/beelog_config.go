@@ -7,7 +7,7 @@ import (
 )
 
 // TODO: parse from ENV config later
-const BeelogEnabled = false
+const BeelogEnabled = true
 
 func (ms *MemoryStorage) AppendBeelogEntries(entries []pb.Entry) error {
 	if len(entries) == 0 {
@@ -16,8 +16,23 @@ func (ms *MemoryStorage) AppendBeelogEntries(entries []pb.Entry) error {
 	ms.Lock()
 	defer ms.Unlock()
 
-	// intentionally not checking for index offsets
-	ms.ents = append(ms.ents, entries...)
+	// intentionally not checking for compacted entries, but verifying the
+	// first entry index.
+	//
+	// TODO: it currently works because the first entries will never be discarded
+	// by beelog (theyre conf entries). Is it ok to keep for all use cases? investigate later
+
+	offset := entries[0].Index - ms.ents[0].Index
+	switch {
+	case uint64(len(ms.ents)) > offset:
+		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...)
+		ms.ents = append(ms.ents, entries...)
+	case uint64(len(ms.ents)) == offset:
+		ms.ents = append(ms.ents, entries...)
+	default:
+		raftLogger.Panicf("missing log entry [last: %d, append at: %d]",
+			ms.lastIndex(), entries[0].Index)
+	}
 	return nil
 }
 
@@ -30,15 +45,17 @@ func (l *raftLog) nextEntsBeelog() (ents []pb.Entry) {
 	if off < l.unstable.offset {
 		last := l.lastIndex()
 
-		// same diff of last and unstable offset
-		ini := min(off, last-(l.unstable.offset-l.applied)+1)
-		end := min(l.committed+1, last+1)
+		// used to calculate initial index like this:
+		//   ini := min(off, (l.unstable.offset - last))
+		//
+		// TODO: investigate later
 
-		if end < ini {
-			l.logger.Fatalf("invalid indexes during stored log retrieval, %d must be <= %d", ini, end)
+		end := min(l.committed+1, last+1)
+		if end < off {
+			l.logger.Fatalf("invalid indexes during stored log retrieval, %d must be <= %d", off, end)
 		}
 
-		storedEnts, err := l.storage.Entries(ini, end, l.maxNextEntsSize)
+		storedEnts, err := l.storage.Entries(off, end, l.maxNextEntsSize)
 		if err != nil {
 			l.logger.Fatal("error retrieving stored entries", err)
 		}

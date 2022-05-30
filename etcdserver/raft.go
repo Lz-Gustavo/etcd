@@ -999,11 +999,15 @@ func (r *raftNode) onStop() {
 	r.Stop()
 	r.ticker.Stop()
 	r.transport.Stop()
-	if err := r.storage.Close(); err != nil {
-		if r.lg != nil {
-			r.lg.Panic("failed to close Raft storage", zap.Error(err))
-		} else {
-			plog.Panicf("raft close storage error: %v", err)
+
+	// LGX: theres no need to Close on beelog, since every file is closed immediately after written
+	if logConfig != Beelog {
+		if err := r.storage.Close(); err != nil {
+			if r.lg != nil {
+				r.lg.Panic("failed to close Raft storage", zap.Error(err))
+			} else {
+				plog.Panicf("raft close storage error: %v", err)
+			}
 		}
 	}
 	close(r.done)
@@ -1124,16 +1128,18 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	if logConfig == Beelog {
 		fmt.Println("starting beelog recov")
 		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, beelogDir, walsnap)
-
-		// TODO: investigate recovery with the minimal entries
 		fmt.Println("finished beelog recov!")
-		fmt.Println("STATE:", st)
-		fmt.Println("NUM ENTRIES:", len(ents))
 
 	} else {
 		fmt.Println("starting standard recovery")
 		w, id, cid, st, ents = readWAL(cfg.Logger, cfg.WALDir(), walsnap, cfg.UnsafeNoFsync)
+		fmt.Println("finished standard recov!")
 	}
+
+	fmt.Println("STATE:", st)
+	fmt.Println("NUM ENTRIES:", len(ents))
+	fmt.Println("first index:", ents[0].Index)
+	fmt.Println("last index:", ents[len(ents)-1].Index)
 
 	if cfg.Logger != nil {
 		cfg.Logger.Info(
