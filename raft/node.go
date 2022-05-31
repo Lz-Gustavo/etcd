@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"go.etcd.io/etcd/expconfig"
 	pb "go.etcd.io/etcd/raft/raftpb"
 )
 
@@ -551,10 +552,10 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 }
 
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
-	// LGX:
-	// TODO: describe this change
+	// LGX: necessary change since the raft log entry retrieval must be different on beelog
+	// to account for possible missing indexes due to compaction.
 	var ents []pb.Entry
-	if BeelogEnabled {
+	if expconfig.LogConfig == expconfig.Beelog {
 		ents = r.raftLog.nextEntsBeelog()
 	} else {
 		ents = r.raftLog.nextEnts()

@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/expconfig"
 	"go.etcd.io/etcd/pkg/pbutil"
 	"go.etcd.io/etcd/raft/raftpb"
 
@@ -65,7 +66,7 @@ func getBeelogConfig() *beemport.LogConfig {
 	return &beemport.LogConfig{
 		Sync:         syncIO,
 		Tick:         beemport.Interval,
-		Period:       uint32(logBatchSize),
+		Period:       uint32(expconfig.LogBatchSize),
 		KeepAll:      true,
 		Fname:        logsDir + "/beelog.log",
 		ParallelIO:   parallelIO,

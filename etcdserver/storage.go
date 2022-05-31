@@ -16,9 +16,6 @@ package etcdserver
 
 import (
 	"io"
-	"log"
-	"os"
-	"strconv"
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
@@ -27,40 +24,8 @@ import (
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
 	"go.etcd.io/etcd/wal/walpb"
-
 	"go.uber.org/zap"
 )
-
-// LGX: different log strategies config, utilized mainly on the server
-// initialization for different Storage implementations
-type LogConfig int
-
-const (
-	NotWAL LogConfig = iota
-	StdWAL
-	BatchWAL
-	Beelog
-)
-
-const defaultLogBatchSize = 1000
-
-var (
-	logConfig    LogConfig
-	logBatchSize int
-)
-
-// LGX: initialization procedure for config envs, called on NewServer()
-func parseLogConfigFromENV() {
-	lc, _ := strconv.Atoi(os.Getenv("ETCD_LOG_CONFIG"))
-	logConfig = LogConfig(lc)
-
-	var err error
-	bs := os.Getenv("ETCD_LOG_BATCH_SIZE")
-	if logBatchSize, err = strconv.Atoi(bs); err != nil {
-		log.Println("using default value for ETCD_LOG_BATCH_SIZE")
-		logBatchSize = defaultLogBatchSize
-	}
-}
 
 type Storage interface {
 	// Save function saves ents and state to the underlying stable storage.

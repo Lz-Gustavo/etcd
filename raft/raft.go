@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"go.etcd.io/etcd/expconfig"
 	"go.etcd.io/etcd/raft/confchange"
 	"go.etcd.io/etcd/raft/quorum"
 	pb "go.etcd.io/etcd/raft/raftpb"
@@ -1576,7 +1577,7 @@ func (r *raft) switchToConfig(cfg tracker.Config, prs tracker.ProgressMap) pb.Co
 
 func (r *raft) loadState(state pb.HardState) {
 	// LGX: must ignore this kind of verification in order to load beelog compacted state
-	if !BeelogEnabled {
+	if expconfig.LogConfig != expconfig.Beelog {
 		if state.Commit < r.raftLog.committed || state.Commit > r.raftLog.lastIndex() {
 			r.logger.Panicf("%x state.commit %d is out of range [%d, %d]", r.id, state.Commit, r.raftLog.committed, r.raftLog.lastIndex())
 		}

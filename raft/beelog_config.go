@@ -2,12 +2,7 @@ package raft
 
 // LGX: raft/beelog_config ...
 
-import (
-	pb "go.etcd.io/etcd/raft/raftpb"
-)
-
-// TODO: parse from ENV config later
-const BeelogEnabled = true
+import pb "go.etcd.io/etcd/raft/raftpb"
 
 func (ms *MemoryStorage) AppendBeelogEntries(entries []pb.Entry) error {
 	if len(entries) == 0 {

@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"go.etcd.io/etcd/expconfig"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
 )
@@ -35,8 +36,8 @@ type batchWALStorage struct {
 
 func NewBatchWALStorage(w *wal.WAL) Storage {
 	sb := &batchWALStorage{
-		buff:  make([]raftpb.Entry, 0, logBatchSize),
-		batch: int(logBatchSize),
+		buff:  make([]raftpb.Entry, 0, expconfig.LogBatchSize),
+		batch: int(expconfig.LogBatchSize),
 		wal:   w,
 	}
 

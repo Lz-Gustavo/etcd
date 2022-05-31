@@ -26,6 +26,7 @@ import (
 	"go.etcd.io/etcd/etcdserver/api/membership"
 	"go.etcd.io/etcd/etcdserver/api/rafthttp"
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/expconfig"
 	"go.etcd.io/etcd/pkg/contention"
 	"go.etcd.io/etcd/pkg/logutil"
 	"go.etcd.io/etcd/pkg/pbutil"
@@ -166,11 +167,11 @@ func (r *raftNode) tick() {
 // start prepares and starts raftNode in a new goroutine. It is no longer safe
 // to modify the fields after it has been started.
 func (r *raftNode) start(rh *raftReadyHandler) {
-	switch logConfig {
-	case BatchWAL:
+	switch expconfig.LogConfig {
+	case expconfig.BatchWAL:
 		go r.startBatchWAL(rh)
 
-	case Beelog:
+	case expconfig.Beelog:
 		go r.startBeelog(rh)
 
 	default:
@@ -388,8 +389,8 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 	defer r.onStop()
 	islead := false
 
-	entriesBatch := make([]raftpb.Entry, 0, logBatchSize)
-	appliesBatch := make([]apply, 0, logBatchSize)
+	entriesBatch := make([]raftpb.Entry, 0, expconfig.LogBatchSize)
+	appliesBatch := make([]apply, 0, expconfig.LogBatchSize)
 	count := 0
 
 	batchTimer := time.NewTimer(time.Second)
@@ -528,7 +529,7 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 			}
 
 			count += len(rd.Entries)
-			if count < logBatchSize {
+			if count < expconfig.LogBatchSize {
 				if islead {
 					// gofail: var raftBeforeLeaderSend struct{}
 					r.transport.Send(r.processMessages(rd.Messages))
@@ -595,7 +596,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 	defer bw.Shutdown()
 
 	var firstIdx, lastIdx uint64
-	appliesBatch := make([]apply, 0, logBatchSize)
+	appliesBatch := make([]apply, 0, expconfig.LogBatchSize)
 	count := 0
 
 	batchTimer := time.NewTimer(time.Second)
@@ -752,7 +753,7 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 			}
 
 			count += len(rd.Entries)
-			if count < logBatchSize {
+			if count < expconfig.LogBatchSize {
 				if err := bw.Log(rd.Entries, false); err != nil {
 					log.Fatalln("failed on beelog.Log, err:", err)
 				}
@@ -1001,7 +1002,7 @@ func (r *raftNode) onStop() {
 	r.transport.Stop()
 
 	// LGX: theres no need to Close on beelog, since every file is closed immediately after written
-	if logConfig != Beelog {
+	if expconfig.LogConfig != expconfig.Beelog {
 		if err := r.storage.Close(); err != nil {
 			if r.lg != nil {
 				r.lg.Panic("failed to close Raft storage", zap.Error(err))
@@ -1125,7 +1126,7 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	)
 
 	// TODO: remove print statements
-	if logConfig == Beelog {
+	if expconfig.LogConfig == expconfig.Beelog {
 		fmt.Println("starting beelog recov")
 		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, beelogDir, walsnap)
 		fmt.Println("finished beelog recov!")
@@ -1159,7 +1160,7 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	}
 	s.SetHardState(st)
 
-	if logConfig == Beelog {
+	if expconfig.LogConfig == expconfig.Beelog {
 		s.AppendBeelogEntries(ents)
 
 	} else {

@@ -48,6 +48,7 @@ import (
 	"go.etcd.io/etcd/etcdserver/api/v3alarm"
 	"go.etcd.io/etcd/etcdserver/api/v3compactor"
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/expconfig"
 	"go.etcd.io/etcd/lease"
 	"go.etcd.io/etcd/lease/leasehttp"
 	"go.etcd.io/etcd/mvcc"
@@ -304,8 +305,8 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	st := v2store.New(StoreClusterPrefix, StoreKeysPrefix)
 
 	// LGX:
-	parseLogConfigFromENV()
-	if logConfig == Beelog {
+	expconfig.ParseLogConfigFromENV()
+	if expconfig.LogConfig == expconfig.Beelog {
 		parseBeelogRecovConfigFromEnv()
 	}
 
@@ -558,18 +559,18 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 	}
 
 	// LGX:
-	switch logConfig {
-	case NotWAL:
+	switch expconfig.LogConfig {
+	case expconfig.NotWAL:
 		nodeCfg.storage = NewNotWALStorage()
 
-	case StdWAL:
+	case expconfig.StdWAL:
 		nodeCfg.storage = NewStorage(w, ss)
 
-	case BatchWAL:
+	case expconfig.BatchWAL:
 		//nodeCfg.storage = NewBatchWALStorage(w)
 		nodeCfg.storage = NewStorage(w, ss)
 
-	case Beelog:
+	case expconfig.Beelog:
 		//nodeCfg.storage = NewBeelogStorage()
 		nodeCfg.storage = NewStorage(w, ss)
 
@@ -1233,7 +1234,7 @@ func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
 	s.applySnapshot(ep, apply)
 
 	// LGX:
-	if logConfig == Beelog {
+	if expconfig.LogConfig == expconfig.Beelog {
 		s.applyEntriesBeelog(ep, apply)
 	} else {
 		s.applyEntries(ep, apply)

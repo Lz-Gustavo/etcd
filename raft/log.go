@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 
+	"go.etcd.io/etcd/expconfig"
 	pb "go.etcd.io/etcd/raft/raftpb"
 )
 
@@ -70,7 +71,7 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 	// LGX:
 	// TODO: describe this change
 	var lastIndex uint64
-	if BeelogEnabled {
+	if expconfig.LogConfig == expconfig.Beelog {
 		lastIndex, err = storage.LastIndexBeelog()
 
 	} else {
