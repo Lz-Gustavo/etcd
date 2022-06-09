@@ -513,6 +513,9 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				r.raftStorage.Append(rd.Entries)
 				r.processRaftEntriesAfterSave(islead, rd, notifyc)
 
+				if isRecoveredState && expconfig.IsRecoveryMsrEnabled {
+					expconfig.RecoveryMeasure.RecordTimestamp()
+				}
 				r.Advance()
 				break
 			}
@@ -732,6 +735,9 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				r.raftStorage.Append(rd.Entries)
 				r.processRaftEntriesAfterSave(islead, rd, notifyc)
 
+				if expconfig.IsRecoveryMsrEnabled {
+					expconfig.RecoveryMeasure.RecordTimestamp()
+				}
 				r.Advance()
 				break
 			}
@@ -1125,22 +1131,26 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 		ents    []raftpb.Entry
 	)
 
-	// TODO: remove print statements
+	// TODO: LGX: check for zap instead of using plog directly
 	if expconfig.LogConfig == expconfig.Beelog {
-		fmt.Println("starting beelog recov")
 		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, beelogDir, walsnap)
-		fmt.Println("finished beelog recov!")
+		plog.Info("finished beelog recov!")
 
 	} else {
-		fmt.Println("starting standard recovery")
 		w, id, cid, st, ents = readWAL(cfg.Logger, cfg.WALDir(), walsnap, cfg.UnsafeNoFsync)
-		fmt.Println("finished standard recov!")
+		plog.Info("finished standard recov!")
 	}
 
-	fmt.Println("STATE:", st)
-	fmt.Println("NUM ENTRIES:", len(ents))
-	fmt.Println("first index:", ents[0].Index)
-	fmt.Println("last index:", ents[len(ents)-1].Index)
+	plog.Info(
+		"STATE:", st,
+		"NUM ENTRIES:", len(ents),
+		"first index:", ents[0].Index,
+		"last index:", ents[len(ents)-1].Index,
+	)
+
+	if expconfig.IsRecoveryMsrEnabled {
+		expconfig.RecoveryMeasure.RecordTimestamp()
+	}
 
 	if cfg.Logger != nil {
 		cfg.Logger.Info(

@@ -302,6 +302,11 @@ type EtcdServer struct {
 // NewServer creates a new EtcdServer from the supplied configuration. The
 // configuration is considered static for the lifetime of the EtcdServer.
 func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
+	// LGX:
+	if expconfig.IsRecoveryMsrEnabled {
+		expconfig.RecoveryMeasure.RecordTimestamp()
+	}
+
 	st := v2store.New(StoreClusterPrefix, StoreKeysPrefix)
 
 	// LGX:
@@ -1154,6 +1159,11 @@ func (s *EtcdServer) run() {
 
 		if isMeasuringLatency {
 			flushLatBufferIntoFile()
+		}
+
+		if expconfig.IsRecoveryMsrEnabled {
+			expconfig.RecoveryMeasure.Flush()
+			expconfig.RecoveryMeasure.Close()
 		}
 	}()
 
