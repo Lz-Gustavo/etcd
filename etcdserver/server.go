@@ -77,7 +77,7 @@ var (
 
 const (
 	// LGX: TODO: switch to envs later for scripting
-	isMeasuringThroughput     = true
+	isMeasuringThroughput     = false
 	defaultThroughputFilename = "~/etcd-throughput.out"
 
 	DefaultSnapshotCount = 100000
@@ -872,7 +872,10 @@ func (s *EtcdServer) start() {
 	s.leaderChanged = make(chan struct{})
 
 	// LGX: start throughput measurement
-	go s.monitorThroughput(s.ctx)
+	if isMeasuringThroughput {
+		go s.monitorThroughput(s.ctx)
+	}
+
 	if s.ClusterVersion() != nil {
 		if lg != nil {
 			lg.Info(
@@ -2387,7 +2390,9 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 	}
 
 	// LGX: count througput after applying new state
-	atomic.AddUint32(&s.thrCount, 1)
+	if isMeasuringThroughput {
+		atomic.AddUint32(&s.thrCount, 1)
+	}
 
 	if ar == nil {
 		return

@@ -490,10 +490,8 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			mustSkipBatching := len(rd.Entries) > 0 && rd.Entries[0].Index <= batchSkipIndex
-			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
-
-			if isRecoveredState || mustSkipBatching {
+			// initial entries, must skip batching
+			if len(rd.Entries) > 0 && rd.Entries[0].Index <= batchSkipIndex {
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:
@@ -513,7 +511,30 @@ func (r *raftNode) startBatchWAL(rh *raftReadyHandler) {
 				r.raftStorage.Append(rd.Entries)
 				r.processRaftEntriesAfterSave(islead, rd, notifyc)
 
-				if isRecoveredState && expconfig.IsRecoveryMsrEnabled {
+				r.Advance()
+				break
+			}
+
+			// is a recovered state, same conditional statement from wal.Save()
+			if raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 {
+				if expconfig.IsRecoveryMsrEnabled {
+					expconfig.RecoveryMeasure.RecordTimestamp()
+				}
+
+				updateCommittedIndex(&ap, rh)
+				select {
+				case r.applyc <- ap:
+				case <-r.stopped:
+					return
+				}
+
+				r.processRaftEntriesBeforeSave(islead, rd)
+				// theres no need to Save() recovered state. It will be ignored on wal.Save()
+
+				r.raftStorage.Append(rd.Entries)
+				r.processRaftEntriesAfterSave(islead, rd, notifyc)
+
+				if expconfig.IsRecoveryMsrEnabled {
 					expconfig.RecoveryMeasure.RecordTimestamp()
 				}
 				r.Advance()
@@ -698,8 +719,8 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				notifyc:  notifyc,
 			}
 
-			mustSkipBatching := len(rd.Entries) > 0 && rd.Entries[0].Index <= batchSkipIndex
-			if mustSkipBatching {
+			// initial entries, must skip batching
+			if len(rd.Entries) > 0 && rd.Entries[0].Index <= batchSkipIndex {
 				if err := bw.Log(rd.Entries, true); err != nil {
 					log.Fatalln("failed on beelog.Log, err:", err)
 				}
@@ -721,8 +742,12 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				break
 			}
 
-			isRecoveredState := raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 // same statement from wal.Save()
-			if isRecoveredState {
+			// is a recovered state, same conditional statement from wal.Save()
+			if raft.IsEmptyHardState(rd.HardState) && len(rd.Entries) == 0 {
+				if expconfig.IsRecoveryMsrEnabled {
+					expconfig.RecoveryMeasure.RecordTimestamp()
+				}
+
 				updateCommittedIndex(&ap, rh)
 				select {
 				case r.applyc <- ap:
@@ -731,7 +756,8 @@ func (r *raftNode) startBeelog(rh *raftReadyHandler) {
 				}
 
 				r.processRaftEntriesBeforeSave(islead, rd)
-				// theres no need to Save() recovered state...
+				// theres no need to Save() recovered state. It will be ignored on wal.Save()
+
 				r.raftStorage.Append(rd.Entries)
 				r.processRaftEntriesAfterSave(islead, rd, notifyc)
 
