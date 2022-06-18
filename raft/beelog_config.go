@@ -36,7 +36,11 @@ func (l *raftLog) nextEntsBeelog() (ents []pb.Entry) {
 	if l.committed+1 <= off {
 		return nil
 	}
+	return l.sliceBeelog(off)
+}
 
+func (l *raftLog) sliceBeelog(off uint64) []pb.Entry {
+	var ents []pb.Entry
 	if off < l.unstable.offset {
 		last := l.lastIndex()
 
@@ -50,7 +54,7 @@ func (l *raftLog) nextEntsBeelog() (ents []pb.Entry) {
 			l.logger.Fatalf("invalid indexes during stored log retrieval, %d must be <= %d", off, end)
 		}
 
-		storedEnts, err := l.storage.Entries(off, end, l.maxNextEntsSize)
+		storedEnts, err := l.storage.Entries(off, end, noLimit)
 		if err != nil {
 			l.logger.Fatal("error retrieving stored entries", err)
 		}
@@ -70,4 +74,22 @@ func (l *raftLog) nextEntsBeelog() (ents []pb.Entry) {
 		}
 	}
 	return ents
+}
+
+// LGX: describe this procedure
+func (ms *MemoryStorage) LastIndexBeelog() (uint64, error) {
+	ms.Lock()
+	defer ms.Unlock()
+	return ms.ents[len(ms.ents)-1].Index, nil
+}
+
+func (l *raftLog) lastIndexBeelog() uint64 {
+	if i, ok := l.unstable.maybeLastIndex(); ok {
+		return i
+	}
+	i, err := l.storage.LastIndexBeelog()
+	if err != nil {
+		panic(err) // TODO(bdarnell)
+	}
+	return i
 }

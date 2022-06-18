@@ -14,7 +14,10 @@
 
 package raft
 
-import pb "go.etcd.io/etcd/raft/raftpb"
+import (
+	"go.etcd.io/etcd/expconfig"
+	pb "go.etcd.io/etcd/raft/raftpb"
+)
 
 // unstable.entries[i] has raft log position i+unstable.offset.
 // Note that unstable.offset may be less than the highest log
@@ -135,7 +138,12 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 		// truncate to after and copy to u.entries
 		// then append
 		u.logger.Infof("truncate the unstable entries before index %d", after)
-		u.entries = append([]pb.Entry{}, u.slice(u.offset, after)...)
+		if expconfig.LogConfig == expconfig.Beelog {
+			u.entries = []pb.Entry{}
+
+		} else {
+			u.entries = append([]pb.Entry{}, u.slice(u.offset, after)...)
+		}
 		u.entries = append(u.entries, ents...)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"sync"
 
+	"go.etcd.io/etcd/expconfig"
 	pb "go.etcd.io/etcd/raft/raftpb"
 )
 
@@ -117,6 +118,13 @@ func (ms *MemoryStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	if lo <= offset {
 		return nil, ErrCompacted
 	}
+
+	// LGX: send all entries, regardless of interval
+	if expconfig.LogConfig == expconfig.Beelog {
+		ents := ms.ents[lo:]
+		return limitSize(ents, maxSize), nil
+	}
+
 	if hi > ms.lastIndex()+1 {
 		raftLogger.Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, ms.lastIndex())
 	}
@@ -148,13 +156,6 @@ func (ms *MemoryStorage) LastIndex() (uint64, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	return ms.lastIndex(), nil
-}
-
-// LGX: describe this procedure
-func (ms *MemoryStorage) LastIndexBeelog() (uint64, error) {
-	ms.Lock()
-	defer ms.Unlock()
-	return ms.ents[len(ms.ents)-1].Index, nil
 }
 
 func (ms *MemoryStorage) lastIndex() uint64 {
@@ -255,6 +256,12 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 
 	ms.Lock()
 	defer ms.Unlock()
+
+	// LGX: ignore verification, since there may be lacking entries
+	if expconfig.LogConfig == expconfig.Beelog {
+		ms.ents = append(ms.ents, entries...)
+		return nil
+	}
 
 	first := ms.firstIndex()
 	last := entries[0].Index + uint64(len(entries)) - 1

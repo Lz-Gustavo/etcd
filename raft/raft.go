@@ -635,6 +635,10 @@ func (r *raft) reset(term uint64) {
 
 func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	li := r.raftLog.lastIndex()
+	if expconfig.LogConfig == expconfig.Beelog {
+		li = r.raftLog.lastIndexBeelog()
+	}
+
 	for i := range es {
 		es[i].Term = r.Term
 		es[i].Index = li + 1 + uint64(i)
@@ -912,10 +916,20 @@ func (r *raft) Step(m pb.Message) error {
 				r.logger.Warningf("%x is unpromotable and can not campaign; ignoring MsgHup", r.id)
 				return nil
 			}
-			ents, err := r.raftLog.slice(r.raftLog.applied+1, r.raftLog.committed+1, noLimit)
-			if err != nil {
-				r.logger.Panicf("unexpected error getting unapplied entries (%v)", err)
+
+			// LGX: beelog entries must come differently
+			var ents []pb.Entry
+			if expconfig.LogConfig == expconfig.Beelog {
+				ents = r.raftLog.sliceBeelog(r.raftLog.applied + 1)
+
+			} else {
+				var err error
+				ents, err = r.raftLog.slice(r.raftLog.applied+1, r.raftLog.committed+1, noLimit)
+				if err != nil {
+					r.logger.Panicf("unexpected error getting unapplied entries (%v)", err)
+				}
 			}
+
 			if n := numOfPendingConf(ents); n != 0 && r.raftLog.committed > r.raftLog.applied {
 				r.logger.Warningf("%x cannot campaign at term %d since there are still %d pending configuration changes to apply", r.id, r.Term, n)
 				return nil

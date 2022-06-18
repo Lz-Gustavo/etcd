@@ -118,8 +118,12 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	if len(ents) == 0 {
 		return l.lastIndex()
 	}
-	if after := ents[0].Index - 1; after < l.committed {
-		l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+
+	// LGX: dont panic :)
+	if expconfig.LogConfig != expconfig.Beelog {
+		if after := ents[0].Index - 1; after < l.committed {
+			l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+		}
 	}
 	l.unstable.truncateAndAppend(ents)
 	return l.lastIndex()
