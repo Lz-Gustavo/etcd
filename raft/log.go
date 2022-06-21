@@ -71,7 +71,7 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 	// LGX:
 	// TODO: describe this change
 	var lastIndex uint64
-	if expconfig.LogConfig == expconfig.Beelog {
+	if expconfig.IsBeelogConfig {
 		lastIndex, err = storage.LastIndexBeelog()
 
 	} else {
@@ -120,7 +120,7 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	}
 
 	// LGX: dont panic :)
-	if expconfig.LogConfig != expconfig.Beelog {
+	if !expconfig.IsBeelogConfig {
 		if after := ents[0].Index - 1; after < l.committed {
 			l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
 		}

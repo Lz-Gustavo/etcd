@@ -28,6 +28,15 @@ func init() {
 	}
 }
 
+// LGX: returns true if there are any beelog files in given directory.
+func ExistBeelog(dir string) bool {
+	names, err := fileutil.ReadDir(dir, fileutil.WithExt(".log"))
+	if err != nil {
+		return false
+	}
+	return len(names) != 0
+}
+
 // LGX:
 // CreateBeelogWAL executes the same procedures as Create(), except that:
 //   * WALs are named after the paremeters 'firstIdx' and 'lastIdx' informed,

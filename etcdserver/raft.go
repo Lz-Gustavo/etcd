@@ -1034,7 +1034,7 @@ func (r *raftNode) onStop() {
 	r.transport.Stop()
 
 	// LGX: theres no need to Close on beelog, since every file is closed immediately after written
-	if expconfig.LogConfig != expconfig.Beelog {
+	if !expconfig.IsBeelogConfig {
 		if err := r.storage.Close(); err != nil {
 			if r.lg != nil {
 				r.lg.Panic("failed to close Raft storage", zap.Error(err))
@@ -1158,8 +1158,8 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	)
 
 	// TODO: LGX: check for zap instead of using plog directly
-	if expconfig.LogConfig == expconfig.Beelog {
-		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, beelogDir, walsnap)
+	if expconfig.IsBeelogConfig {
+		w, id, cid, st, ents = BeelogRecovery(cfg.Logger, walsnap)
 		plog.Info("finished beelog recov!")
 
 	} else {
@@ -1196,7 +1196,7 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	}
 	s.SetHardState(st)
 
-	if expconfig.LogConfig == expconfig.Beelog {
+	if expconfig.IsBeelogConfig {
 		s.AppendBeelogEntries(ents)
 
 	} else {

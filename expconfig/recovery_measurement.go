@@ -58,6 +58,10 @@ func (rm *RecovMsr) RecordTimestamp() {
 
 func (rm *RecovMsr) Flush() {
 	if _, err := rm.buff.WriteTo(rm.file); err != nil {
+		log.Fatalln("failed copying from measurement buffer to file, err:", err)
+	}
+
+	if err := rm.file.Sync(); err != nil {
 		log.Fatalln("failed flushing data to disk, err:", err)
 	}
 }

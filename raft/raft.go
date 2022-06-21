@@ -634,9 +634,12 @@ func (r *raft) reset(term uint64) {
 }
 
 func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
-	li := r.raftLog.lastIndex()
-	if expconfig.LogConfig == expconfig.Beelog {
+	var li uint64
+	if expconfig.IsBeelogConfig {
 		li = r.raftLog.lastIndexBeelog()
+
+	} else {
+		li = r.raftLog.lastIndex()
 	}
 
 	for i := range es {
@@ -919,7 +922,7 @@ func (r *raft) Step(m pb.Message) error {
 
 			// LGX: beelog entries must come differently
 			var ents []pb.Entry
-			if expconfig.LogConfig == expconfig.Beelog {
+			if expconfig.IsBeelogConfig {
 				ents = r.raftLog.sliceBeelog(r.raftLog.applied + 1)
 
 			} else {
@@ -1591,7 +1594,7 @@ func (r *raft) switchToConfig(cfg tracker.Config, prs tracker.ProgressMap) pb.Co
 
 func (r *raft) loadState(state pb.HardState) {
 	// LGX: must ignore this kind of verification in order to load beelog compacted state
-	if expconfig.LogConfig != expconfig.Beelog {
+	if !expconfig.IsBeelogConfig {
 		if state.Commit < r.raftLog.committed || state.Commit > r.raftLog.lastIndex() {
 			r.logger.Panicf("%x state.commit %d is out of range [%d, %d]", r.id, state.Commit, r.raftLog.committed, r.raftLog.lastIndex())
 		}

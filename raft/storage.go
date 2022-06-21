@@ -120,7 +120,7 @@ func (ms *MemoryStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	}
 
 	// LGX: send all entries, regardless of interval
-	if expconfig.LogConfig == expconfig.Beelog {
+	if expconfig.IsBeelogConfig {
 		ents := ms.ents[lo:]
 		return limitSize(ents, maxSize), nil
 	}
@@ -258,7 +258,7 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 	defer ms.Unlock()
 
 	// LGX: ignore verification, since there may be lacking entries
-	if expconfig.LogConfig == expconfig.Beelog {
+	if expconfig.IsBeelogConfig {
 		ms.ents = append(ms.ents, entries...)
 		return nil
 	}

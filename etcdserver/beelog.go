@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"log"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/expconfig"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
@@ -34,8 +31,7 @@ type BeelogWr struct {
 }
 
 func NewBeelogWrFromEnv(r *raftNode, rh *raftReadyHandler) *BeelogWr {
-	numTables, isParisParallelIO, dirs := parseBeelogConfigFromEnv()
-	return NewBeelogWr(numTables, isParisParallelIO, dirs, r, rh)
+	return NewBeelogWr(expconfig.BeelogConcLevel, expconfig.BeelogIsParallelIO, expconfig.BeelogDirs, r, rh)
 }
 
 func NewBeelogWr(numTables int, isParallelIO bool, dirs []string, r *raftNode, rh *raftReadyHandler) *BeelogWr {
@@ -263,24 +259,6 @@ func getKeyFromRaftEntry(ent raftpb.Entry) (int64, error) {
 		return 0, err
 	}
 	return key, nil
-}
-
-func parseBeelogConfigFromEnv() (concLevel int, isParallelIO bool, dirs []string) {
-	concLevel, _ = strconv.Atoi(os.Getenv("ETCD_BEELOG_CONC_LEVEL"))
-	if concLevel <= 0 {
-		log.Println("using default value for ETCD_BEELOG_CONC_LEVEL")
-		concLevel = defaultBeelogConcLevel
-	}
-
-	dir, exists := os.LookupEnv("ETCD_BEELOG_LOGS_DIR")
-	if !exists {
-		log.Println("using /tmp as value for ETCD_BEELOG_LOGS_DIR")
-		dir = "/tmp"
-	}
-	dirs = strings.Split(dir, ",")
-
-	isParallelIO, _ = strconv.ParseBool(os.Getenv("ETCD_BEELOG_PARALLEL_IO"))
-	return
 }
 
 func isValidBeelogConfig(numTables int, isParallelIO bool, dirs []string) bool {

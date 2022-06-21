@@ -311,9 +311,6 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 
 	// LGX:
 	expconfig.ParseLogConfigFromENV()
-	if expconfig.LogConfig == expconfig.Beelog {
-		parseBeelogRecovConfigFromEnv()
-	}
 
 	var (
 		w  *wal.WAL
@@ -341,7 +338,13 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 		return nil, fmt.Errorf("cannot access data directory: %v", terr)
 	}
 
-	haveWAL := wal.Exist(cfg.WALDir())
+	// LGX:
+	var haveWAL bool
+	if expconfig.IsBeelogConfig {
+		haveWAL = wal.ExistBeelog(expconfig.BeelogDirs[0])
+	} else {
+		haveWAL = wal.Exist(cfg.WALDir())
+	}
 
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		if cfg.Logger != nil {
@@ -442,8 +445,11 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			return nil, fmt.Errorf("cannot write to member directory: %v", err)
 		}
 
-		if err = fileutil.IsDirWriteable(cfg.WALDir()); err != nil {
-			return nil, fmt.Errorf("cannot write to WAL directory: %v", err)
+		// LGX:
+		if !expconfig.IsBeelogConfig {
+			if err = fileutil.IsDirWriteable(cfg.WALDir()); err != nil {
+				return nil, fmt.Errorf("cannot write to WAL directory: %v", err)
+			}
 		}
 
 		if cfg.ShouldDiscover() {
@@ -457,53 +463,57 @@ func NewServer(cfg ServerConfig) (srv *EtcdServer, err error) {
 			}
 		}
 
-		// Find a snapshot to start/restart a raft node
-		walSnaps, serr := wal.ValidSnapshotEntries(cfg.Logger, cfg.WALDir())
-		if serr != nil {
-			return nil, serr
-		}
-		// snapshot files can be orphaned if etcd crashes after writing them but before writing the corresponding
-		// wal log entries
-		snapshot, err = ss.LoadNewestAvailable(walSnaps)
-		if err != nil && err != snap.ErrNoSnapshot {
-			return nil, err
-		}
+		// LGX: since WALs would not be present, and snapshots arent implemented,
+		// trying to recover a valid snapshot on beelog would throw an error.
+		if !expconfig.IsBeelogConfig {
+			// Find a snapshot to start/restart a raft node
+			walSnaps, serr := wal.ValidSnapshotEntries(cfg.Logger, cfg.WALDir())
+			if serr != nil {
+				return nil, serr
+			}
+			// snapshot files can be orphaned if etcd crashes after writing them but before writing the corresponding
+			// wal log entries
+			snapshot, err = ss.LoadNewestAvailable(walSnaps)
+			if err != nil && err != snap.ErrNoSnapshot {
+				return nil, err
+			}
 
-		if snapshot != nil {
-			if err = st.Recovery(snapshot.Data); err != nil {
-				if cfg.Logger != nil {
-					cfg.Logger.Panic("failed to recover from snapshot")
-				} else {
-					plog.Panicf("recovered store from snapshot error: %v", err)
+			if snapshot != nil {
+				if err = st.Recovery(snapshot.Data); err != nil {
+					if cfg.Logger != nil {
+						cfg.Logger.Panic("failed to recover from snapshot")
+					} else {
+						plog.Panicf("recovered store from snapshot error: %v", err)
+					}
 				}
-			}
 
-			if cfg.Logger != nil {
-				cfg.Logger.Info(
-					"recovered v2 store from snapshot",
-					zap.Uint64("snapshot-index", snapshot.Metadata.Index),
-					zap.String("snapshot-size", humanize.Bytes(uint64(snapshot.Size()))),
-				)
-			} else {
-				plog.Infof("recovered store from snapshot at index %d", snapshot.Metadata.Index)
-			}
-
-			if be, err = recoverSnapshotBackend(cfg, be, *snapshot); err != nil {
 				if cfg.Logger != nil {
-					cfg.Logger.Panic("failed to recover v3 backend from snapshot", zap.Error(err))
+					cfg.Logger.Info(
+						"recovered v2 store from snapshot",
+						zap.Uint64("snapshot-index", snapshot.Metadata.Index),
+						zap.String("snapshot-size", humanize.Bytes(uint64(snapshot.Size()))),
+					)
 				} else {
-					plog.Panicf("recovering backend from snapshot error: %v", err)
+					plog.Infof("recovered store from snapshot at index %d", snapshot.Metadata.Index)
 				}
-			}
-			if cfg.Logger != nil {
-				s1, s2 := be.Size(), be.SizeInUse()
-				cfg.Logger.Info(
-					"recovered v3 backend from snapshot",
-					zap.Int64("backend-size-bytes", s1),
-					zap.String("backend-size", humanize.Bytes(uint64(s1))),
-					zap.Int64("backend-size-in-use-bytes", s2),
-					zap.String("backend-size-in-use", humanize.Bytes(uint64(s2))),
-				)
+
+				if be, err = recoverSnapshotBackend(cfg, be, *snapshot); err != nil {
+					if cfg.Logger != nil {
+						cfg.Logger.Panic("failed to recover v3 backend from snapshot", zap.Error(err))
+					} else {
+						plog.Panicf("recovering backend from snapshot error: %v", err)
+					}
+				}
+				if cfg.Logger != nil {
+					s1, s2 := be.Size(), be.SizeInUse()
+					cfg.Logger.Info(
+						"recovered v3 backend from snapshot",
+						zap.Int64("backend-size-bytes", s1),
+						zap.String("backend-size", humanize.Bytes(uint64(s1))),
+						zap.Int64("backend-size-in-use-bytes", s2),
+						zap.String("backend-size-in-use", humanize.Bytes(uint64(s2))),
+					)
+				}
 			}
 		}
 
@@ -908,6 +918,11 @@ func (s *EtcdServer) start() {
 }
 
 func (s *EtcdServer) purgeFile() {
+	// LGX: purging WAL files would cause an error since they dont exist on the regular path
+	if expconfig.IsBeelogConfig {
+		return
+	}
+
 	var dberrc, serrc, werrc <-chan error
 	var dbdonec, sdonec, wdonec <-chan struct{}
 	if s.Cfg.MaxSnapFiles > 0 {
@@ -1247,7 +1262,7 @@ func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
 	s.applySnapshot(ep, apply)
 
 	// LGX:
-	if expconfig.LogConfig == expconfig.Beelog {
+	if expconfig.IsBeelogConfig {
 		s.applyEntriesBeelog(ep, apply)
 	} else {
 		s.applyEntries(ep, apply)

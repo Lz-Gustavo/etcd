@@ -555,7 +555,7 @@ func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	// LGX: necessary change since the raft log entry retrieval must be different on beelog
 	// to account for possible missing indexes due to compaction.
 	var ents []pb.Entry
-	if expconfig.LogConfig == expconfig.Beelog {
+	if expconfig.IsBeelogConfig {
 		ents = r.raftLog.nextEntsBeelog()
 	} else {
 		ents = r.raftLog.nextEnts()

@@ -138,7 +138,7 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 		// truncate to after and copy to u.entries
 		// then append
 		u.logger.Infof("truncate the unstable entries before index %d", after)
-		if expconfig.LogConfig == expconfig.Beelog {
+		if expconfig.IsBeelogConfig {
 			u.entries = []pb.Entry{}
 
 		} else {
