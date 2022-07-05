@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/expconfig/common"
 	"go.etcd.io/etcd/pkg/pbutil"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
@@ -316,7 +317,7 @@ func entriesWereReducedCorrectly(logged, reduced []raftpb.Entry) bool {
 
 	loggedState := make(StateTable)
 	for _, ent := range logged {
-		key, err := getKeyFromRaftEntry(ent)
+		key, err := common.GetKeyFromRaftEntry(ent)
 		if err != nil {
 			return false
 		}
@@ -325,7 +326,7 @@ func entriesWereReducedCorrectly(logged, reduced []raftpb.Entry) bool {
 
 	reducedState := make(StateTable)
 	for _, ent := range reduced {
-		key, err := getKeyFromRaftEntry(ent)
+		key, err := common.GetKeyFromRaftEntry(ent)
 		if err != nil {
 			return false
 		}

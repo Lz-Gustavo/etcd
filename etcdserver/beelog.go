@@ -1,20 +1,16 @@
 package etcdserver
 
 import (
-	"bytes"
-	"encoding/binary"
 	"errors"
 	"sync"
 
-	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
 	"go.etcd.io/etcd/expconfig"
+	"go.etcd.io/etcd/expconfig/common"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/wal"
 	"go.uber.org/zap"
 )
-
-var ErrUnknowBeelogOp = errors.New("unknow operation informed for beelog")
 
 type StateTable map[int64]raftpb.Entry
 
@@ -83,8 +79,8 @@ func (bw *BeelogWr) Log(ents []raftpb.Entry, filled bool) error {
 	bw.mu[cur].Lock()
 
 	for _, ent := range ents {
-		k, err := getKeyFromRaftEntry(ent)
-		if errors.Is(err, ErrUnknowBeelogOp) {
+		k, err := common.GetKeyFromRaftEntry(ent)
+		if errors.Is(err, common.ErrUnknowBeelogOp) {
 			bw.conf[cur] = append(bw.conf[cur], ent)
 			continue
 
@@ -229,36 +225,6 @@ func modInt(a, b int) int {
 		return a
 	}
 	return a + b
-}
-
-// TODO: study the possibility of a more efficient unmarshal. Maybe theres no need to
-// unmarshal the entire structure since we only need the operation key
-func getKeyFromRaftEntry(ent raftpb.Entry) (int64, error) {
-	if ent.Type != raftpb.EntryNormal {
-		return 0, ErrUnknowBeelogOp
-	}
-
-	raftReq := &pb.InternalRaftRequest{}
-	if err := raftReq.Unmarshal(ent.Data); err != nil {
-		return 0, ErrUnknowBeelogOp
-	}
-
-	if raftReq.Put == nil && raftReq.Range == nil {
-		return 0, ErrUnknowBeelogOp
-	}
-
-	var rd *bytes.Reader
-	if raftReq.Put != nil {
-		rd = bytes.NewReader(raftReq.Put.Key)
-	} else {
-		rd = bytes.NewReader(raftReq.Range.Key)
-	}
-
-	key, err := binary.ReadVarint(rd)
-	if err != nil {
-		return 0, err
-	}
-	return key, nil
 }
 
 func isValidBeelogConfig(numTables int, isParallelIO bool, dirs []string) bool {

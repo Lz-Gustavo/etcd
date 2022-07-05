@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"go.etcd.io/etcd/expconfig/common"
 	"go.etcd.io/etcd/pkg/fileutil"
 	"go.etcd.io/etcd/pkg/pbutil"
 	"go.etcd.io/etcd/raft/raftpb"
@@ -120,7 +122,9 @@ func OpenBeelog(lg *zap.Logger, dirpath string, names []string, snap walpb.Snaps
 	return w, nil
 }
 
-// LGX: ReadAllBeelog() is a variant of ReadAll()
+// LGX: ReadAllBeelog() is a variant of ReadAll(). It skips CRC validation and expects a slice of
+// file descriptors set in ASCENDING order of beelog intervals. This procedure is very similar to
+// wal.ReadAlll(), decoding all entries regardless of their metadata.
 func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -140,6 +144,100 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 			// LGX: removed index verification assuming WAls are read in ascending order
 			ents = append(ents, e)
 			w.enti = e.Index
+
+		case stateType:
+			state = mustUnmarshalState(rec.Data)
+
+		case metadataType:
+			if metadata != nil && !bytes.Equal(metadata, rec.Data) {
+				state.Reset()
+				return nil, state, nil, ErrMetadataConflict
+			}
+			metadata = rec.Data
+
+		case crcType:
+			// LGX: removed crcType verification
+
+		case snapshotType:
+			var snap walpb.Snapshot
+			pbutil.MustUnmarshal(&snap, rec.Data)
+			if snap.Index == w.start.Index {
+				if snap.Term != w.start.Term {
+					state.Reset()
+					return nil, state, nil, ErrSnapshotMismatch
+				}
+			}
+
+		default:
+			state.Reset()
+			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
+		}
+	}
+
+	// LGX: removed tail() invocation and match variable
+
+	// close decoder, disable reading
+	if w.readClose != nil {
+		w.readClose()
+		w.readClose = nil
+	}
+
+	w.start = walpb.Snapshot{}
+	w.metadata = metadata
+	w.decoder = nil
+
+	if err == ErrCRCMismatch || err == walpb.ErrCRCMismatch || err == io.EOF {
+		err = nil
+	}
+	return metadata, state, ents, err
+}
+
+// LGX: ReadAllBeelogIgnoringSameKeys() is a variant of ReadAllBeelog(). It skips CRC
+// validation and expects a slice of file descriptors set in DESCENDING order of beelog
+// intervals. This procedure keeps an in-memory map of executed keys in order to discard
+// commands operating over the same keys of already decoded entries.
+func (w *WAL) ReadAllBeelogIgnoringSameKeys() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// used to discard entries of the same key
+	keyEntryTable := map[int64]struct{}{}
+
+	rec := &walpb.Record{}
+
+	if w.decoder == nil {
+		return nil, state, nil, ErrDecoderNotFound
+	}
+	decoder := w.decoder
+
+	firstEntry := true
+	for err = decoder.decodeBeelog(rec); err == nil; err = decoder.decodeBeelog(rec) {
+		switch rec.Type {
+		case entryType:
+			e := mustUnmarshalEntry(rec.Data)
+
+			// WAL is parsed on descending order, so the last index must be
+			// the first entry executed
+			if firstEntry {
+				w.enti = e.Index
+				firstEntry = false
+			}
+
+			key, err := common.GetKeyFromRaftEntry(e)
+			if errors.Is(err, common.ErrUnknowBeelogOp) {
+				ents = append(ents, e)
+				break
+
+			} else if err != nil {
+				return nil, state, nil, err
+			}
+
+			if _, exists := keyEntryTable[key]; exists {
+				// skip entry, since an entry for the same key was already appendend
+				break
+			}
+			keyEntryTable[key] = struct{}{}
+			ents = append(ents, e)
 
 		case stateType:
 			state = mustUnmarshalState(rec.Data)
