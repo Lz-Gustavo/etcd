@@ -136,6 +136,7 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 	}
 	decoder := w.decoder
 
+	var highestIndexOnWAL uint64
 	for err = decoder.decodeBeelog(rec); err == nil; err = decoder.decodeBeelog(rec) {
 		switch rec.Type {
 		case entryType:
@@ -143,7 +144,11 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 
 			// LGX: removed index verification assuming WAls are read in ascending order
 			ents = append(ents, e)
-			w.enti = e.Index
+
+			// sequential order of indexes is not ensured
+			if e.Index > highestIndexOnWAL {
+				highestIndexOnWAL = e.Index
+			}
 
 		case stateType:
 			state = mustUnmarshalState(rec.Data)
@@ -173,6 +178,9 @@ func (w *WAL) ReadAllBeelog() (metadata []byte, state raftpb.HardState, ents []r
 			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
 		}
 	}
+
+	// update only the highest index value
+	w.enti = highestIndexOnWAL
 
 	// LGX: removed tail() invocation and match variable
 
@@ -210,17 +218,16 @@ func (w *WAL) ReadAllBeelogIgnoringSameKeys() (metadata []byte, state raftpb.Har
 	}
 	decoder := w.decoder
 
-	firstEntry := true
+	var highestIndexOnWAL uint64
+	firstState, firstMetadata := true, true
 	for err = decoder.decodeBeelog(rec); err == nil; err = decoder.decodeBeelog(rec) {
 		switch rec.Type {
 		case entryType:
 			e := mustUnmarshalEntry(rec.Data)
 
-			// WAL is parsed on descending order, so the last index must be
-			// the first entry executed
-			if firstEntry {
-				w.enti = e.Index
-				firstEntry = false
+			// sequential order of indexes is not ensured
+			if e.Index > highestIndexOnWAL {
+				highestIndexOnWAL = e.Index
 			}
 
 			key, err := common.GetKeyFromRaftEntry(e)
@@ -240,14 +247,25 @@ func (w *WAL) ReadAllBeelogIgnoringSameKeys() (metadata []byte, state raftpb.Har
 			ents = append(ents, e)
 
 		case stateType:
-			state = mustUnmarshalState(rec.Data)
+			// WAL is parsed on descending order, so the last state informed must be
+			// the first state unmarshaled
+			if firstState {
+				state = mustUnmarshalState(rec.Data)
+				firstState = false
+			}
 
 		case metadataType:
 			if metadata != nil && !bytes.Equal(metadata, rec.Data) {
 				state.Reset()
 				return nil, state, nil, ErrMetadataConflict
 			}
-			metadata = rec.Data
+
+			// WAL is parsed on descending order, so the returned metadata must be
+			// the first metadata encountered
+			if firstMetadata {
+				metadata = rec.Data
+				firstMetadata = false
+			}
 
 		case crcType:
 			// LGX: removed crcType verification
@@ -267,6 +285,9 @@ func (w *WAL) ReadAllBeelogIgnoringSameKeys() (metadata []byte, state raftpb.Har
 			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
 		}
 	}
+
+	// update only the highest index value
+	w.enti = highestIndexOnWAL
 
 	// LGX: removed tail() invocation and match variable
 
