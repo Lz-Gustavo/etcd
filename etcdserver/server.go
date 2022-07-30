@@ -77,8 +77,8 @@ var (
 
 const (
 	// LGX: TODO: switch to envs later for scripting
-	isMeasuringThroughput     = false
-	defaultThroughputFilename = "~/etcd-throughput.out"
+	isMeasuringThroughput     = true
+	defaultThroughputFilename = "/tmp/etcd-throughput.out"
 
 	DefaultSnapshotCount = 100000
 
@@ -2402,11 +2402,6 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 			removeNeedlessRangeReqs(raftReq.Txn)
 		}
 		ar = s.applyV3.Apply(&raftReq)
-	}
-
-	// LGX: count througput after applying new state
-	if isMeasuringThroughput {
-		atomic.AddUint32(&s.thrCount, 1)
 	}
 
 	if ar == nil {

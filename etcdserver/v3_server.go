@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"sync/atomic"
 	"time"
 
 	"go.etcd.io/etcd/auth"
@@ -123,6 +124,11 @@ func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeRe
 		err = serr
 		return nil, err
 	}
+
+	// LGX: count througput for the range req
+	if isMeasuringThroughput {
+		atomic.AddUint32(&s.thrCount, 1)
+	}
 	return resp, err
 }
 
@@ -131,6 +137,11 @@ func (s *EtcdServer) Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse
 	resp, err := s.raftRequest(ctx, pb.InternalRaftRequest{Put: r})
 	if err != nil {
 		return nil, err
+	}
+
+	// LGX: count througput for the put req
+	if isMeasuringThroughput {
+		atomic.AddUint32(&s.thrCount, 1)
 	}
 	return resp.(*pb.PutResponse), nil
 }
