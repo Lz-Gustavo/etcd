@@ -215,10 +215,11 @@ func (w *WAL) ReadAllBeelogIgnoringSameKeys() (metadata []byte, state raftpb.Har
 
 	// initial capacity is given by the worst case scenario that none compaction was made
 	// (numCommands * batchSize) + the dummy entry (1)
-	ents = make([]raftpb.Entry, 0, len(w.locks)*expconfig.LogBatchSize+1)
+	cap := len(w.locks)*expconfig.LogBatchSize + 1
+	ents = make([]raftpb.Entry, 0, cap)
 
 	// used to discard entries of the same key
-	keyEntryTable := map[int64]struct{}{}
+	keyEntryTable := make(map[int64]struct{}, cap)
 
 	rec := &walpb.Record{}
 
