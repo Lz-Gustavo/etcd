@@ -1,6 +1,8 @@
 package etcdserver
 
 import (
+	"fmt"
+	"math/rand"
 	"reflect"
 	"sort"
 	"testing"
@@ -148,4 +150,35 @@ func TestReverseEntrySlice(t *testing.T) {
 			}
 		})
 	}
+}
+
+func BenchmarkSortAlgorithmsOnWALNamesDesc(b *testing.B) {
+	input := getRandAscWALNames(300, 100000)
+
+	b.Run("desc", func(b *testing.B) {
+		sort.Sort(SortByWALNameDesc(input))
+	})
+
+	b.Run("stable desc", func(b *testing.B) {
+		sort.Stable(SortByWALNameDesc(input))
+	})
+
+	b.Run("asc reversed", func(b *testing.B) {
+		sort.Sort(sort.Reverse(SortByWALNameAsc(input)))
+	})
+
+	b.Run("asc stable reversed", func(b *testing.B) {
+		sort.Stable(sort.Reverse(SortByWALNameAsc(input)))
+	})
+}
+
+func getRandAscWALNames(batchSize, n int) []string {
+	names := make([]string, 0, n)
+	cur := 0
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("%d-%d-%d.log", cur+1, cur+batchSize, rand.Intn(batchSize))
+		names = append(names, name)
+		cur += batchSize
+	}
+	return names
 }

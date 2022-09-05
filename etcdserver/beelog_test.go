@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	keySize  = 128
-	diffKeys = 10000
+	keySize   = 128
+	valueSize = 512
+	diffKeys  = 10000
 )
 
 func TestBeelogAPI(t *testing.T) {
@@ -300,12 +301,28 @@ func BenchmarkApplyCoordinationApproaches(b *testing.B) {
 	})
 }
 
+func BenchmarkKeyExtractionCosts(b *testing.B) {
+	ent := getRandEntry(rand.Intn(100))
+
+	b.StartTimer()
+	_, err := common.GetKeyFromRaftEntry(ent)
+	b.StopTimer()
+
+	if err != nil {
+		b.Fatal(err)
+	}
+}
+
 func getRandEntry(index int) raftpb.Entry {
 	randKey := make([]byte, keySize)
 	binary.PutVarint(randKey, rand.Int63n(diffKeys))
 
+	randValue := make([]byte, valueSize)
+	binary.PutVarint(randValue, rand.Int63())
+
 	req := &pb.InternalRaftRequest{Put: &pb.PutRequest{
-		Key: randKey,
+		Key:   randKey,
+		Value: randValue,
 	}}
 	return raftpb.Entry{Index: uint64(index), Data: pbutil.MustMarshal(req)}
 }

@@ -1195,13 +1195,7 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 		s.ApplySnapshot(*snapshot)
 	}
 	s.SetHardState(st)
-
-	if expconfig.IsBeelogConfig {
-		s.AppendBeelogEntries(ents)
-
-	} else {
-		s.Append(ents)
-	}
+	s.Append(ents)
 
 	c := &raft.Config{
 		ID:              uint64(id),

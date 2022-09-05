@@ -72,8 +72,9 @@ func descendingRecovery(lg *zap.Logger, waldir string, snap walpb.Snapshot) (*wa
 		FatalIfLog(lg, "failed reading beelog wal names", err)
 	}
 
-	// sort names in DESCENDING order
-	sort.Sort(SortByWALNameDesc(names))
+	// sort names in DESCENDING order. Since files are returned nearly sorted in asc order
+	// (OS dependant, check os.File.Readdirnames), sort.Stable performs better
+	sort.Stable(SortByWALNameDesc(names))
 
 	w, err := wal.OpenBeelog(lg, waldir, names, snap)
 	if err != nil {
@@ -85,18 +86,21 @@ func descendingRecovery(lg *zap.Logger, waldir string, snap walpb.Snapshot) (*wa
 		FatalIfLog(lg, "error on reading beelog WAL:", err)
 	}
 
-	// reverse the entry slice in-place, so that entries are applied
-	// on ascending order
-	reverseEntrySlice(ents)
+	if len(ents) > 0 {
+		// NOTE: The first and last entries are swapped because etcd utilizes entries[0].Index to
+		// detect its apply offset. Also, theres no need to reverse the remaining entries slice
+		// since its already ensured that only one entry per key will be returned
+		ents[0], ents[len(ents)-1] = ents[len(ents)-1], ents[0]
 
-	if len(ents) > 0 && ents[len(ents)-1].Index != st.Commit {
-		// add an empty entry with the index matching the last commit
-		ents = append(ents, raftpb.Entry{
-			Term:  st.Term,
-			Type:  raftpb.EntryNormal,
-			Index: st.Commit,
-			Data:  []byte{},
-		})
+		if ents[len(ents)-1].Index != st.Commit {
+			// add an empty entry with the index matching the last commit
+			ents = append(ents, raftpb.Entry{
+				Term:  st.Term,
+				Type:  raftpb.EntryNormal,
+				Index: st.Commit,
+				Data:  []byte{},
+			})
+		}
 	}
 
 	var metadata pb.Metadata
@@ -154,6 +158,8 @@ func (a SortByWALNameDesc) Less(i, j int) bool {
 	return idxI > idxJ
 }
 
+// reverse the entry slice in-place, used to ensure that entries applied on ascending
+// order by their indexes
 func reverseEntrySlice(sl []raftpb.Entry) {
 	for i, j := 0, len(sl)-1; i < j; i, j = i+1, j-1 {
 		sl[i], sl[j] = sl[j], sl[i]
