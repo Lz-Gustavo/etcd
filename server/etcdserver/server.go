@@ -71,6 +71,7 @@ import (
 	"go.etcd.io/etcd/server/v3/storage/mvcc"
 	"go.etcd.io/etcd/server/v3/storage/schema"
 	"go.etcd.io/raft/v3"
+	"go.etcd.io/raft/v3/experiment"
 	"go.etcd.io/raft/v3/raftpb"
 )
 
@@ -831,6 +832,12 @@ func (s *EtcdServer) run() {
 		s.Cleanup()
 
 		close(s.done)
+
+		// NOTE (Gus): flush follower catch-up experiment measurements
+		if experiment.Config.BeelogCatchUpEnabled {
+			experiment.Config.CatchUpMsr.Flush()
+			experiment.Config.CatchUpMsr.Close()
+		}
 	}()
 
 	var expiredLeaseC <-chan []*lease.Lease
