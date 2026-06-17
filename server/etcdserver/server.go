@@ -834,7 +834,7 @@ func (s *EtcdServer) run() {
 		close(s.done)
 
 		// NOTE (Gus): flush follower catch-up experiment measurements
-		if experiment.Config.IsBeelogCatchUpEnabled {
+		if experiment.Config.IsMeasureFollowerCatchUpEnabled {
 			experiment.Config.CatchUpMsr.Flush()
 			experiment.Config.CatchUpMsr.Close()
 		}

@@ -1,18 +1,19 @@
 #!/bin/bash
 
 nodeIP=127.0.0.1
-freshStart=true
+nodeID=node0
 
+freshStart=true
 diskpath=/tmp
-stateFolder=${diskpath}/etcd-node0
+stateFolder=${diskpath}/etcd-${nodeID}
 
 # NOTE: not yet implemented
 export RAFT_MEASURE_FOLLOWER_LAG_ENABLED=false
 export RAFT_MEASURE_FOLLOWER_LAG_INTERVAL=3s
-export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag-node0.out
+export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag-${nodeID}.out
 
 export RAFT_MEASURE_FOLLOWER_CATCHUP_ENABLED=true
-export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time-node0.out
+export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time-${nodeID}.out
 
 # NOTE: not yet implemented
 export ETCD_THR_FILE=${measurepath}/throughput.out
@@ -33,7 +34,7 @@ if [[ ${freshStart} == "true" ]]; then
   rm -rf ${stateFolder}/wal
 fi
 
-~/go/src/github.com/Lz-Gustavo/etcd/bin/etcd --name=node0 \
+~/go/src/github.com/Lz-Gustavo/etcd/bin/etcd --name=${nodeID} \
   --log-level=debug \
   --initial-advertise-peer-urls http://${nodeIP}:2380 \
   --listen-peer-urls=http://${nodeIP}:2380 \
@@ -47,3 +48,8 @@ fi
 # NOTE (Gus): to evaluate with increase timeout
 # ./bin/etcdctl --command-timeout=10s --endpoints=http://127.0.0.1:2370 put mykey "test1"
 # ./bin/etcdctl --endpoints=http://127.0.0.1:2370 get mykey
+
+
+# 1803076000
+
+#  908413000
