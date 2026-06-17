@@ -4,15 +4,15 @@ nodeIP=127.0.0.1
 freshStart=true
 
 diskpath=/tmp
-stateFolder=${diskpath}/etcd
+stateFolder=${diskpath}/etcd-node1
 
 # NOTE: not yet implemented
 export RAFT_MEASURE_FOLLOWER_LAG_ENABLED=false
 export RAFT_MEASURE_FOLLOWER_LAG_INTERVAL=3s
-export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag.out
+export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag-node1.out
 
-export RAFT_MEASURE_FOLLOWER_CATCHUP_ENABLED=true
-export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time.out
+export RAFT_MEASURE_FOLLOWER_CATCHUP_ENABLED=false
+export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time-node1.out
 
 # NOTE: not yet implemented
 export ETCD_THR_FILE=${measurepath}/throughput.out
@@ -23,9 +23,14 @@ export ETCD_DATA_DIR=${stateFolder}/data
 export ETCD_WAL_DIR=${stateFolder}/wal
 export ETCD_SNAPSHOT_COUNT=1000000000000 # infinite?
 
+# NOTE (Gus): increased values to allow evaluation with artificially increased latency
+export ETCD_HEARTBEAT_INTERVAL="500"
+export ETCD_ELECTION_TIMEOUT="5000"
+
 
 if [[ ${freshStart} == "true" ]]; then
-  rm -rf ${stateFolder}
+  rm -rf ${stateFolder}/data
+  rm -rf ${stateFolder}/wal
 fi
 
 ~/go/src/github.com/Lz-Gustavo/etcd/bin/etcd --name=node1 \
@@ -37,4 +42,3 @@ fi
   --initial-cluster-token etcd-cluster-1 \
   --initial-cluster node0=http://${nodeIP}:2380,node1=http://${nodeIP}:2381,node2=http://${nodeIP}:2382 \
   --initial-cluster-state=new
-

@@ -4,15 +4,15 @@ nodeIP=127.0.0.1
 freshStart=true
 
 diskpath=/tmp
-stateFolder=${diskpath}/etcd
+stateFolder=${diskpath}/etcd-node0
 
 # NOTE: not yet implemented
 export RAFT_MEASURE_FOLLOWER_LAG_ENABLED=false
 export RAFT_MEASURE_FOLLOWER_LAG_INTERVAL=3s
-export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag.out
+export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag-node0.out
 
 export RAFT_MEASURE_FOLLOWER_CATCHUP_ENABLED=true
-export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time.out
+export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time-node0.out
 
 # NOTE: not yet implemented
 export ETCD_THR_FILE=${measurepath}/throughput.out
@@ -23,19 +23,15 @@ export ETCD_DATA_DIR=${stateFolder}/data
 export ETCD_WAL_DIR=${stateFolder}/wal
 export ETCD_SNAPSHOT_COUNT=1000000000000 # infinite?
 
+# NOTE (Gus): increased values to allow evaluation with artificially increased latency
+export ETCD_HEARTBEAT_INTERVAL="500"
+export ETCD_ELECTION_TIMEOUT="5000"
+
 
 if [[ ${freshStart} == "true" ]]; then
-  rm -rf ${stateFolder}
+  rm -rf ${stateFolder}/data
+  rm -rf ${stateFolder}/wal
 fi
-
-# ~/go/src/github.com/Lz-Gustavo/etcd/bin/etcd --name=node0 \
-#   --log-level=debug \
-#   --listen-peer-urls=http://0.0.0.0:2380 \
-#   --listen-client-urls=http://0.0.0.0:2379 \
-#   --advertise-client-urls=http://${nodeIP}:2379 \
-#   --initial-advertise-peer-urls=http://${nodeIP}:2380 \
-#   --initial-cluster node0=http://${nodeIP}:2380 \
-#   --initial-cluster-state=new
 
 ~/go/src/github.com/Lz-Gustavo/etcd/bin/etcd --name=node0 \
   --log-level=debug \
@@ -46,3 +42,8 @@ fi
   --initial-cluster-token etcd-cluster-1 \
   --initial-cluster node0=http://${nodeIP}:2380,node1=http://${nodeIP}:2381,node2=http://${nodeIP}:2382 \
   --initial-cluster-state new
+
+
+# NOTE (Gus): to evaluate with increase timeout
+# ./bin/etcdctl --command-timeout=10s --endpoints=http://127.0.0.1:2370 put mykey "test1"
+# ./bin/etcdctl --endpoints=http://127.0.0.1:2370 get mykey
