@@ -132,6 +132,9 @@ func init() {
 			},
 		),
 	)
+
+	// NOTE (Gus): initialize global measurement config struct from env, if enabled
+	experiment.LoadEnvConfig()
 }
 
 type Response struct {
@@ -590,6 +593,11 @@ func (s *EtcdServer) start() {
 		)
 	}
 
+	// NOTE (Gus): start throughput measurement routine if enabled
+	if experiment.Config.IsMeasureEtcdThoughputEnabled {
+		go experiment.Config.ThrMsr.Run(s.ctx)
+	}
+
 	// TODO: if this is an empty log, writes all peer infos
 	// into the first entry
 	go s.run()
@@ -825,6 +833,17 @@ func (s *EtcdServer) run() {
 		// wait for goroutines before closing raft so wal stays open
 		s.wg.Wait()
 
+		// NOTE (Gus): flush follower catch-up and throughpout experiment measurements
+		if experiment.Config.IsMeasureFollowerCatchUpEnabled {
+			experiment.Config.CatchUpMsr.Flush()
+			experiment.Config.CatchUpMsr.Close()
+		}
+
+		if experiment.Config.IsMeasureEtcdThoughputEnabled {
+			experiment.Config.ThrMsr.Flush()
+			experiment.Config.ThrMsr.Close()
+		}
+
 		// must stop raft after scheduler-- etcdserver can leak rafthttp pipelines
 		// by adding a peer after raft stops the transport
 		s.r.stop()
@@ -832,12 +851,6 @@ func (s *EtcdServer) run() {
 		s.Cleanup()
 
 		close(s.done)
-
-		// NOTE (Gus): flush follower catch-up experiment measurements
-		if experiment.Config.IsMeasureFollowerCatchUpEnabled {
-			experiment.Config.CatchUpMsr.Flush()
-			experiment.Config.CatchUpMsr.Close()
-		}
 	}()
 
 	var expiredLeaseC <-chan []*lease.Lease

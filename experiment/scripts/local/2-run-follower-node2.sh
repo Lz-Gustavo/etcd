@@ -7,18 +7,11 @@ freshStart=true
 diskpath=/tmp
 stateFolder=${diskpath}/etcd-${nodeID}
 
-# NOTE: not yet implemented
-export RAFT_MEASURE_FOLLOWER_LAG_ENABLED=false
-export RAFT_MEASURE_FOLLOWER_LAG_INTERVAL=3s
-export RAFT_MEASURE_FOLLOWER_LAG_FILENAME=/tmp/follower-lag-${nodeID}.out
-
 export RAFT_MEASURE_FOLLOWER_CATCHUP_ENABLED=false
 export RAFT_MEASURE_FOLLOWER_CATCHUP_FILENAME=/tmp/follower-catchup-time-${nodeID}.out
 
-# NOTE: not yet implemented
-export ETCD_THR_FILE=${measurepath}/throughput.out
-export ETCD_LAT_FILE=${measurepath}/latency.out
-
+export ETCD_MEASURE_THR_ENABLED=true
+export ETCD_MEASURE_THR_FILENAME=/tmp/throughput-${nodeID}.out
 
 # NOTE (Gus): follower artificial latency configured only for node2
 export RAFT_LOCAL_FOLLOWER_LATENCY_ENABLED=true

@@ -40,6 +40,7 @@ import (
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/lease/leasehttp"
 	"go.etcd.io/etcd/server/v3/storage/mvcc"
+	"go.etcd.io/raft/v3/experiment"
 )
 
 const (
@@ -150,6 +151,11 @@ func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeRe
 	if serr := s.doSerialize(ctx, chk, get); serr != nil {
 		err = serr
 		return nil, err
+	}
+
+	// NOTE (Gus): count throughput for range req
+	if experiment.Config.IsMeasureEtcdThoughputEnabled {
+		experiment.Config.ThrMsr.Count()
 	}
 	return resp, err
 }
@@ -303,6 +309,11 @@ func (s *EtcdServer) Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse
 	resp, err := s.raftRequest(ctx, &pb.InternalRaftRequest{Put: r})
 	if err != nil {
 		return nil, err
+	}
+
+	// NOTE (Gus): count throughput for put req
+	if experiment.Config.IsMeasureEtcdThoughputEnabled {
+		experiment.Config.ThrMsr.Count()
 	}
 	return resp.(*pb.PutResponse), nil
 }
