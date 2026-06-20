@@ -27,6 +27,7 @@ import (
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/pkg/v3/traceutil"
 	"go.etcd.io/etcd/server/v3/storage/mvcc"
+	"go.etcd.io/raft/v3/experiment"
 )
 
 // Count returns the number of keys in [key, rangeEnd) at the given revision.
@@ -53,6 +54,11 @@ func Range(ctx context.Context, lg *zap.Logger, kv mvcc.KV, r *pb.RangeRequest, 
 	txnRead := kv.Read(mvcc.ConcurrentReadTxMode, trace)
 	defer txnRead.End()
 	resp, err = executeRange(ctx, lg, txnRead, r, withTotalCount)
+
+	// NOTE (Gus): count throughput for successfull range req
+	if experiment.Config.IsMeasureEtcdThoughputEnabled && err == nil {
+		experiment.Config.ThrMsr.Count()
+	}
 	return resp, trace, err
 }
 

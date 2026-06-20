@@ -25,6 +25,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/errors"
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/storage/mvcc"
+	"go.etcd.io/raft/v3/experiment"
 )
 
 func Put(ctx context.Context, lg *zap.Logger, lessor lease.Lessor, kv mvcc.KV, p *pb.PutRequest) (resp *pb.PutResponse, trace *traceutil.Trace, err error) {
@@ -42,7 +43,13 @@ func Put(ctx context.Context, lg *zap.Logger, lessor lease.Lessor, kv mvcc.KV, p
 	if err != nil {
 		return nil, trace, err
 	}
-	return put(ctx, txnWrite, p, prevKV), trace, nil
+	resp = put(ctx, txnWrite, p, prevKV)
+
+	// NOTE (Gus): count throughput for successfull put req
+	if experiment.Config.IsMeasureEtcdThoughputEnabled && err == nil {
+		experiment.Config.ThrMsr.Count()
+	}
+	return resp, trace, nil
 }
 
 func put(ctx context.Context, txnWrite mvcc.TxnWrite, p *pb.PutRequest, prevKV *mvcc.RangeResult) *pb.PutResponse {
